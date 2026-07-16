@@ -1,0 +1,33 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Test, coverage, and profiling outputs
+/coverage/
+*.profraw
+tarpaulin-report.html
+
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and IDE files
+/.idea/
+/.vscode/
+*.code-workspace
+*.swp
+*.swo
+*~
+
+# Local agent settings
+/.claude/settings.local.json
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log

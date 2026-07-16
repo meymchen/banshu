@@ -1,0 +1,229 @@
+[
+  {
+    "id": "glm-4.5",
+    "name": "GLM-4.5",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 131072,
+    "max_tokens": 98304,
+    "cost": {
+      "input": 0.6,
+      "output": 2.2,
+      "cache_read": 0.11,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-4.5-air",
+    "name": "GLM-4.5-Air",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 131072,
+    "max_tokens": 98304,
+    "cost": {
+      "input": 0.2,
+      "output": 1.1,
+      "cache_read": 0.03,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-4.5-flash",
+    "name": "GLM-4.5-Flash",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 131072,
+    "max_tokens": 98304,
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-4.5v",
+    "name": "GLM-4.5V",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 64000,
+    "max_tokens": 16384,
+    "cost": {
+      "input": 0.6,
+      "output": 1.8,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-4.6",
+    "name": "GLM-4.6",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 204800,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 0.6,
+      "output": 2.2,
+      "cache_read": 0.11,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-4.6v",
+    "name": "GLM-4.6V",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 128000,
+    "max_tokens": 32768,
+    "cost": {
+      "input": 0.3,
+      "output": 0.9,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-4.7",
+    "name": "GLM-4.7",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 204800,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 0.6,
+      "output": 2.2,
+      "cache_read": 0.11,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-4.7-flash",
+    "name": "GLM-4.7-Flash",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 200000,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-4.7-flashx",
+    "name": "GLM-4.7-FlashX",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 200000,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 0.07,
+      "output": 0.4,
+      "cache_read": 0.01,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-5",
+    "name": "GLM-5",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 204800,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 1.0,
+      "output": 3.2,
+      "cache_read": 0.2,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-5-turbo",
+    "name": "GLM-5-Turbo",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 200000,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 1.2,
+      "output": 4.0,
+      "cache_read": 0.24,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-5.1",
+    "name": "GLM-5.1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 200000,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 1.4,
+      "output": 4.4,
+      "cache_read": 0.26,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-5.2",
+    "name": "GLM-5.2",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 1000000,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 1.4,
+      "output": 4.4,
+      "cache_read": 0.26,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "glm-5v-turbo",
+    "name": "GLM-5V-Turbo",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 200000,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 1.2,
+      "output": 4.0,
+      "cache_read": 0.24,
+      "cache_write": 0.0
+    }
+  }
+]
