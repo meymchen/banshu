@@ -1,0 +1,119 @@
+//! The streaming contract: an async-iterable of delta events terminating in a
+//! `Done` or `Error` carrying the final [`AssistantMessage`].
+//!
+//! Errors are **in-band**: the stream never yields a `Result`. A transport
+//! failure mid-response terminates with an `Error` event whose message carries
+//! whatever partial content had already streamed, so callers keep their tokens.
+
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
+
+use futures_core::Stream;
+use futures_util::StreamExt;
+
+use crate::types::{AssistantMessage, StopReason, ToolCall};
+
+/// A single incremental event in a streamed assistant response.
+///
+/// Every event after `Start` carries a `partial` snapshot of the message as
+/// assembled so far, so a consumer can render without tracking state itself.
+#[derive(Debug, Clone)]
+pub enum AssistantMessageEvent {
+    /// Emitted once at the start, before any content.
+    Start {
+        /// The empty message being assembled.
+        partial: AssistantMessage,
+    },
+    /// A chunk of text output.
+    TextDelta {
+        /// Index of the content block this delta belongs to.
+        content_index: usize,
+        /// The appended text.
+        delta: String,
+        /// Snapshot of the message so far.
+        partial: AssistantMessage,
+    },
+    /// A chunk of reasoning output.
+    ThinkingDelta {
+        /// Index of the content block this delta belongs to.
+        content_index: usize,
+        /// The appended reasoning text.
+        delta: String,
+        /// Snapshot of the message so far.
+        partial: AssistantMessage,
+    },
+    /// A completed tool call.
+    ToolCallEnd {
+        /// Index of the content block.
+        content_index: usize,
+        /// The assembled tool call.
+        tool_call: ToolCall,
+        /// Snapshot of the message so far.
+        partial: AssistantMessage,
+    },
+    /// Terminal success — the final assembled message.
+    Done {
+        /// Why the completion stopped (`Stop`, `Length`, or `ToolUse`).
+        reason: StopReason,
+        /// The final message.
+        message: AssistantMessage,
+    },
+    /// Terminal failure — the final message with `stop_reason` `Error`/`Aborted`.
+    Error {
+        /// Why the completion stopped (`Error` or `Aborted`).
+        reason: StopReason,
+        /// The final message, carrying any partial content and `error_message`.
+        error: AssistantMessage,
+    },
+}
+
+/// A stream of [`AssistantMessageEvent`]s with a terminal [`AssistantMessage`].
+pub struct MessageStream {
+    inner: Pin<Box<dyn Stream<Item = AssistantMessageEvent> + Send>>,
+}
+
+impl MessageStream {
+    /// Wrap an event stream.
+    pub fn new(stream: impl Stream<Item = AssistantMessageEvent> + Send + 'static) -> Self {
+        Self {
+            inner: Box::pin(stream),
+        }
+    }
+
+    /// A stream that yields a single terminal `Error` event. Used when a
+    /// request can't even be dispatched (e.g. no provider owns the model).
+    pub(crate) fn immediate_error(model: &str, provider: &str, detail: &str) -> Self {
+        let mut message = AssistantMessage::streaming(model, provider, "");
+        message.stop_reason = StopReason::Error;
+        message.error_message = Some(detail.to_string());
+        let event = AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: message,
+        };
+        Self::new(futures_util::stream::once(async move { event }))
+    }
+
+    /// Drive the stream to completion and return the final message.
+    ///
+    /// This never returns a `Result`: failures arrive as an `Error` event whose
+    /// message has `stop_reason` `Error`/`Aborted` and an `error_message`.
+    pub async fn final_message(mut self) -> AssistantMessage {
+        let mut last: Option<AssistantMessage> = None;
+        while let Some(event) = self.inner.next().await {
+            match event {
+                AssistantMessageEvent::Done { message, .. } => last = Some(message),
+                AssistantMessageEvent::Error { error, .. } => last = Some(error),
+                _ => {}
+            }
+        }
+        last.expect("stream ended without a terminal Done or Error event")
+    }
+}
+
+impl Stream for MessageStream {
+    type Item = AssistantMessageEvent;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}

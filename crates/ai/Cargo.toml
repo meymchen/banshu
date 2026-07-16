@@ -1,0 +1,31 @@
+[package]
+name = "banshu-ai"
+description = "Unified LLM API for open-source models and providers (DeepSeek, Z.AI, MiniMax, Moonshot, and any OpenAI/Anthropic-compatible API)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["rustls"]
+rustls = ["reqwest/rustls-tls"]
+native-tls = ["reqwest/native-tls"]
+schemars = ["dep:schemars"]
+
+[dependencies]
+async-stream = "0.3"
+bytes = "1"
+futures-core = "0.3"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json"] }
+schemars = { version = "0.8", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["time"] }
+tracing = "0.1"
+
+[dev-dependencies]
+futures = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

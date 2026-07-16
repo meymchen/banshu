@@ -1,0 +1,167 @@
+[
+  {
+    "id": "kimi-k2-0711-preview",
+    "name": "Kimi K2 0711",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "context_window": 131072,
+    "max_tokens": 16384,
+    "cost": {
+      "input": 0.6,
+      "output": 2.5,
+      "cache_read": 0.15,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k2-0905-preview",
+    "name": "Kimi K2 0905",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "context_window": 262144,
+    "max_tokens": 262144,
+    "cost": {
+      "input": 0.6,
+      "output": 2.5,
+      "cache_read": 0.15,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k2-thinking",
+    "name": "Kimi K2 Thinking",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 262144,
+    "max_tokens": 262144,
+    "cost": {
+      "input": 0.6,
+      "output": 2.5,
+      "cache_read": 0.15,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k2-thinking-turbo",
+    "name": "Kimi K2 Thinking Turbo",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "context_window": 262144,
+    "max_tokens": 262144,
+    "cost": {
+      "input": 1.15,
+      "output": 8.0,
+      "cache_read": 0.15,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k2-turbo-preview",
+    "name": "Kimi K2 Turbo",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "context_window": 262144,
+    "max_tokens": 262144,
+    "cost": {
+      "input": 2.4,
+      "output": 10.0,
+      "cache_read": 0.6,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k2.5",
+    "name": "Kimi K2.5",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 262144,
+    "max_tokens": 262144,
+    "cost": {
+      "input": 0.6,
+      "output": 3.0,
+      "cache_read": 0.1,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k2.6",
+    "name": "Kimi K2.6",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 262144,
+    "max_tokens": 262144,
+    "cost": {
+      "input": 0.95,
+      "output": 4.0,
+      "cache_read": 0.16,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k2.7-code",
+    "name": "Kimi K2.7 Code",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 262144,
+    "max_tokens": 262144,
+    "cost": {
+      "input": 0.95,
+      "output": 4.0,
+      "cache_read": 0.19,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k2.7-code-highspeed",
+    "name": "Kimi K2.7 Code HighSpeed",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 262144,
+    "max_tokens": 262144,
+    "cost": {
+      "input": 1.9,
+      "output": 8.0,
+      "cache_read": 0.38,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-k3",
+    "name": "Kimi K3",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 1048576,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    }
+  }
+]
