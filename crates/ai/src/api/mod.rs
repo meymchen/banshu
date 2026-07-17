@@ -48,7 +48,11 @@ pub(crate) fn compute_cost(usage: &Usage, rates: &ModelCost) -> Cost {
     let input = per(usage.input, rates.input);
     let output = per(usage.output, rates.output);
     let cache_read = per(usage.cache_read, rates.cache_read);
-    let cache_write = per(usage.cache_write, rates.cache_write);
+    // 1h-TTL cache writes are billed at 2x the input rate, not the
+    // (short-TTL) cache-write rate.
+    let long_write = usage.cache_write_1h.unwrap_or(0);
+    let short_write = usage.cache_write.saturating_sub(long_write);
+    let cache_write = per(short_write, rates.cache_write) + per(long_write, rates.input * 2.0);
     Cost {
         input,
         output,

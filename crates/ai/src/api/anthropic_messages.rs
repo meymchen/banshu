@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{ApiRequest, ChatApi, compute_cost, fail, parse_arguments};
+use crate::CacheRetention;
 use crate::http;
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
@@ -86,9 +87,14 @@ impl ChatApi for AnthropicMessages {
                 };
                 match value.get("type").and_then(Value::as_str) {
                     Some("message_start") => {
-                        usage.input = value["message"]["usage"]["input_tokens"]
-                            .as_u64()
-                            .unwrap_or(0);
+                        let wire = &value["message"]["usage"];
+                        usage.input = wire["input_tokens"].as_u64().unwrap_or(0);
+                        usage.output = wire["output_tokens"].as_u64().unwrap_or(0);
+                        usage.cache_read = wire["cache_read_input_tokens"].as_u64().unwrap_or(0);
+                        usage.cache_write =
+                            wire["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+                        usage.cache_write_1h =
+                            wire["cache_creation"]["ephemeral_1h_input_tokens"].as_u64();
                     }
                     Some("content_block_start") => {
                         let index = value["index"].as_u64().unwrap_or(0) as usize;
@@ -164,8 +170,15 @@ impl ChatApi for AnthropicMessages {
                         if let Some(reason) = value["delta"]["stop_reason"].as_str() {
                             stop_reason = map_stop_reason(reason);
                         }
-                        if let Some(output) = value["usage"]["output_tokens"].as_u64() {
+                        let wire = &value["usage"];
+                        if let Some(output) = wire["output_tokens"].as_u64() {
                             usage.output = output;
+                        }
+                        if let Some(read) = wire["cache_read_input_tokens"].as_u64() {
+                            usage.cache_read = read;
+                        }
+                        if let Some(write) = wire["cache_creation_input_tokens"].as_u64() {
+                            usage.cache_write = write;
                         }
                     }
                     Some("message_stop") => break 'outer,
@@ -173,7 +186,8 @@ impl ChatApi for AnthropicMessages {
                 }
             }
 
-            usage.total_tokens = usage.input + usage.output;
+            // Anthropic reports no total; derive it from all token classes.
+            usage.total_tokens = usage.input + usage.output + usage.cache_read + usage.cache_write;
             usage.cost = compute_cost(&usage, &cost);
             message.content = assemble(&blocks);
             message.usage = usage;
@@ -239,11 +253,22 @@ fn map_stop_reason(reason: &str) -> StopReason {
     }
 }
 
+/// The `cache_control` marker to place on cache breakpoints, or `None` when
+/// caching is disabled. `Long` retention requests the 1h TTL.
+fn cache_control(options: &crate::StreamOptions) -> Option<Value> {
+    match options.cache_retention.unwrap_or(CacheRetention::Short) {
+        CacheRetention::Disabled => None,
+        CacheRetention::Short => Some(serde_json::json!({ "type": "ephemeral" })),
+        CacheRetention::Long => Some(serde_json::json!({ "type": "ephemeral", "ttl": "1h" })),
+    }
+}
+
 fn build_request_body(
     model: &Model,
     context: &Context,
     options: &crate::StreamOptions,
 ) -> MessagesRequest {
+    let cache_control = cache_control(options);
     let mut messages: Vec<Value> = Vec::new();
     for message in &context.messages {
         match message {
@@ -284,25 +309,66 @@ fn build_request_body(
         }
     }
 
+    // Cache the conversation history: attach the breakpoint to the last
+    // block of the last user-role message, converting string content to
+    // blocks when needed.
+    if let Some(control) = &cache_control
+        && let Some(last) = messages.last_mut()
+        && last["role"] == "user"
+    {
+        match &mut last["content"] {
+            Value::String(text) => {
+                let text = std::mem::take(text);
+                last["content"] = serde_json::json!([{
+                    "type": "text",
+                    "text": text,
+                    "cache_control": control,
+                }]);
+            }
+            Value::Array(blocks) => {
+                if let Some(block) = blocks.last_mut() {
+                    block["cache_control"] = control.clone();
+                }
+            }
+            _ => {}
+        }
+    }
+
     let max_tokens = options
         .max_tokens
         .or(Some(model.max_tokens).filter(|&n| n > 0))
         .unwrap_or(DEFAULT_MAX_TOKENS);
 
+    // System prompt goes out as a text block so it can carry a breakpoint.
+    let system = context.system_prompt.as_ref().map(|text| {
+        let mut block = serde_json::json!({ "type": "text", "text": text });
+        if let Some(control) = &cache_control {
+            block["cache_control"] = control.clone();
+        }
+        Value::Array(vec![block])
+    });
+
+    // Tools render first in the prompt; one breakpoint on the last tool
+    // caches the whole definition list.
+    let tool_count = context.tools.len();
     let tools = context
         .tools
         .iter()
-        .map(|tool| WireTool {
+        .enumerate()
+        .map(|(index, tool)| WireTool {
             name: tool.name.clone(),
             description: tool.description.clone(),
             input_schema: tool.parameters.clone(),
+            cache_control: cache_control
+                .clone()
+                .filter(|_| index + 1 == tool_count),
         })
         .collect();
 
     MessagesRequest {
         model: model.id.clone(),
         max_tokens,
-        system: context.system_prompt.clone(),
+        system,
         messages,
         tools,
         stream: true,
@@ -315,7 +381,7 @@ struct MessagesRequest {
     model: String,
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<Value>,
     messages: Vec<Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<WireTool>,
@@ -329,4 +395,6 @@ struct WireTool {
     name: String,
     description: String,
     input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<Value>,
 }
