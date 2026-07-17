@@ -12,6 +12,22 @@ use crate::options::StreamOptions;
 use crate::stream::MessageStream;
 use crate::types::{ApiKind, Context, Model};
 
+/// Request-side prompt-cache controls supported by an OpenAI-compatible
+/// provider.
+///
+/// Cache usage is parsed for every provider regardless of this setting. This
+/// only controls non-standard request fields or headers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenAiPromptCaching {
+    /// The service manages caching automatically; send no cache extensions.
+    #[default]
+    Automatic,
+    /// Send OpenAI's `prompt_cache_key` and optional 24-hour retention field.
+    OpenAi,
+    /// Send stable session-affinity headers when a session id is supplied.
+    SessionAffinityHeaders,
+}
+
 /// A configured provider: metadata + auth + a wire-protocol handle.
 pub struct Provider {
     id: String,
@@ -21,6 +37,7 @@ pub struct Provider {
     api_kind: ApiKind,
     api: Arc<dyn ChatApi>,
     http: reqwest::Client,
+    openai_prompt_caching: OpenAiPromptCaching,
 }
 
 impl Provider {
@@ -42,6 +59,7 @@ impl Provider {
             api_kind: ApiKind::OpenAiCompletions,
             api: Arc::new(OpenAiCompletions),
             http: http::build_client(),
+            openai_prompt_caching: OpenAiPromptCaching::Automatic,
         }
     }
 
@@ -63,7 +81,26 @@ impl Provider {
             api_kind: ApiKind::AnthropicMessages,
             api: Arc::new(AnthropicMessages),
             http: http::build_client(),
+            openai_prompt_caching: OpenAiPromptCaching::Automatic,
         }
+    }
+
+    /// Configure the request-side prompt-cache controls accepted by this
+    /// OpenAI-compatible provider.
+    pub fn with_openai_prompt_caching(mut self, caching: OpenAiPromptCaching) -> Self {
+        self.openai_prompt_caching = caching;
+        self
+    }
+
+    /// OpenAI — Chat Completions with explicit prompt-cache routing support.
+    pub fn openai() -> Self {
+        Self::openai_compatible(
+            "openai",
+            "OpenAI",
+            "https://api.openai.com/v1",
+            ["OPENAI_API_KEY"],
+        )
+        .with_openai_prompt_caching(OpenAiPromptCaching::OpenAi)
     }
 
     /// DeepSeek — OpenAI-compatible, `DEEPSEEK_API_KEY`.
@@ -142,6 +179,7 @@ impl Provider {
             options,
             api_key,
             http: self.http.clone(),
+            openai_prompt_caching: self.openai_prompt_caching,
         })
     }
 
