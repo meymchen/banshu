@@ -35,8 +35,8 @@ async fn streams_a_minimal_text_completion() {
         .and(header("anthropic-version", "2023-06-01"))
         .and(body_partial_json(serde_json::json!({
             "model": "glm-4.6",
-            "system": "Be terse.",
-            "messages": [{ "role": "user", "content": "Say hi" }],
+            "system": [{ "type": "text", "text": "Be terse." }],
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Say hi" }] }],
         })))
         .respond_with(
             ResponseTemplate::new(200)

@@ -26,6 +26,10 @@ pub struct Usage {
     pub cache_read: u64,
     /// Tokens written to cache.
     pub cache_write: u64,
+    /// Tokens written with the 1h cache TTL (a subset of `cache_write`), when
+    /// the provider reports them. Anthropic bills these at twice the input
+    /// rate instead of the short-TTL cache-write rate.
+    pub cache_write_1h: Option<u64>,
     /// Reasoning tokens, when the provider reports them (a subset of `output`).
     pub reasoning: Option<u64>,
     /// Total tokens across input and output.
