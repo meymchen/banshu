@@ -2,6 +2,19 @@
 
 use std::time::Duration;
 
+/// Requested lifetime for provider-managed prompt caches.
+///
+/// Providers that cache prompts automatically may ignore this option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheRetention {
+    /// Do not send optional cache-routing or retention controls.
+    Disabled,
+    /// Use the provider's short-lived/default prompt cache.
+    Short,
+    /// Request the provider's extended prompt-cache lifetime when supported.
+    Long,
+}
+
 /// Per-request knobs. All fields are optional; providers ignore what they
 /// don't support.
 #[derive(Debug, Clone, Default)]
@@ -16,4 +29,9 @@ pub struct StreamOptions {
     pub timeout: Option<Duration>,
     /// Maximum client-side retry attempts.
     pub max_retries: Option<u32>,
+    /// Prompt-cache retention preference. `None` uses the provider default.
+    pub cache_retention: Option<CacheRetention>,
+    /// Stable conversation identifier used by providers that support
+    /// cache-routing keys or session-affinity headers.
+    pub session_id: Option<String>,
 }

@@ -16,12 +16,9 @@ pub struct Cost {
 }
 
 /// Token counts reported by the provider plus derived [`Cost`].
-///
-/// The cache fields are kept even though prompt caching is deferred, so that
-/// cost stays correct once caching lands without a type change.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Usage {
-    /// Input (prompt) tokens.
+    /// Uncached input (prompt) tokens, billed at the normal input rate.
     pub input: u64,
     /// Output (completion) tokens.
     pub output: u64,

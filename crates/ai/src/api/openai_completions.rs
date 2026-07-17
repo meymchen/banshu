@@ -9,7 +9,9 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use super::{ApiRequest, ChatApi, compute_cost, fail, parse_arguments};
+use crate::CacheRetention;
 use crate::http;
+use crate::provider::OpenAiPromptCaching;
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
     AssistantContent, AssistantMessage, Context, Message, Model, StopReason, TextContent,
@@ -20,12 +22,18 @@ use crate::types::{
 pub struct OpenAiCompletions;
 
 const API_NAME: &str = "openai-completions";
+const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH: usize = 64;
 
 impl ChatApi for OpenAiCompletions {
     fn stream(&self, request: ApiRequest<'_>) -> MessageStream {
         // Extract everything the async body needs as owned values up front, so
         // the returned stream is `'static`.
-        let body = build_request_body(request.model, request.context, request.options);
+        let body = build_request_body(
+            request.model,
+            request.context,
+            request.options,
+            request.openai_prompt_caching,
+        );
         let url = format!(
             "{}/chat/completions",
             request.model.base_url.trim_end_matches('/')
@@ -36,6 +44,12 @@ impl ChatApi for OpenAiCompletions {
         let provider = request.model.provider.clone();
         let cost = request.model.cost.clone();
         let timeout = request.options.timeout;
+        let cache_retention = request
+            .options
+            .cache_retention
+            .unwrap_or(CacheRetention::Short);
+        let session_id = request.options.session_id.clone();
+        let prompt_caching = request.openai_prompt_caching;
 
         let stream = async_stream::stream! {
             let mut message = AssistantMessage::streaming(&model_id, &provider, API_NAME);
@@ -47,6 +61,15 @@ impl ChatApi for OpenAiCompletions {
             };
 
             let mut builder = http.post(&url).bearer_auth(api_key).json(&body);
+            if prompt_caching == OpenAiPromptCaching::SessionAffinityHeaders
+                && cache_retention != CacheRetention::Disabled
+                && let Some(session_id) = session_id
+            {
+                builder = builder
+                    .header("session_id", &session_id)
+                    .header("x-client-request-id", &session_id)
+                    .header("x-session-affinity", session_id);
+            }
             if let Some(timeout) = timeout {
                 builder = builder.timeout(timeout);
             }
@@ -88,6 +111,13 @@ impl ChatApi for OpenAiCompletions {
                 let Ok(parsed) = serde_json::from_str::<ChatChunk>(&data) else {
                     continue; // ignore keep-alives / malformed lines
                 };
+                let chunk_usage = parsed
+                    .usage
+                    .as_ref()
+                    .or_else(|| parsed.choices.first().and_then(|choice| choice.usage.as_ref()));
+                if let Some(chunk_usage) = chunk_usage {
+                    usage = normalize_usage(chunk_usage);
+                }
                 if let Some(choice) = parsed.choices.into_iter().next() {
                     if let Some(reasoning) = choice.delta.reasoning_content
                         && !reasoning.is_empty()
@@ -133,16 +163,8 @@ impl ChatApi for OpenAiCompletions {
                         stop_reason = map_stop_reason(&reason);
                     }
                 }
-                if let Some(chunk_usage) = parsed.usage {
-                    usage.input = chunk_usage.prompt_tokens;
-                    usage.output = chunk_usage.completion_tokens;
-                    usage.reasoning = chunk_usage
-                        .completion_tokens_details
-                        .and_then(|details| details.reasoning_tokens);
-                }
             }
 
-            usage.total_tokens = usage.input + usage.output;
             usage.cost = compute_cost(&usage, &cost);
             message.usage = usage;
             message.stop_reason = stop_reason;
@@ -218,7 +240,75 @@ fn map_stop_reason(reason: &str) -> StopReason {
     }
 }
 
-fn build_request_body(model: &Model, context: &Context, options: &crate::StreamOptions) -> ChatRequest {
+/// Normalize the cache accounting variants used by OpenAI-compatible APIs.
+///
+/// `Usage::input` is always the uncached prompt portion. This prevents cached
+/// tokens from being billed twice when computing costs.
+fn normalize_usage(raw: &ChunkUsage) -> Usage {
+    let (input, cache_read, cache_write) =
+        if raw.prompt_cache_hit_tokens.is_some() || raw.prompt_cache_miss_tokens.is_some() {
+            // DeepSeek reports the hit and miss portions directly.
+            let cache_read = raw.prompt_cache_hit_tokens.unwrap_or_else(|| {
+                raw.prompt_tokens
+                    .saturating_sub(raw.prompt_cache_miss_tokens.unwrap_or(0))
+            });
+            let input = raw
+                .prompt_cache_miss_tokens
+                .unwrap_or_else(|| raw.prompt_tokens.saturating_sub(cache_read));
+            (input, cache_read, 0)
+        } else {
+            let reported_cached = raw
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens)
+                .unwrap_or(0);
+            let cache_write = raw
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|details| details.cache_write_tokens)
+                .unwrap_or(0);
+
+            // Some compatible providers include current-request cache writes
+            // in `cached_tokens`; pi-ai removes writes from cache reads.
+            let cache_read = if cache_write > 0 {
+                reported_cached.saturating_sub(cache_write)
+            } else {
+                reported_cached
+            };
+            let input = raw
+                .prompt_tokens
+                .saturating_sub(cache_read)
+                .saturating_sub(cache_write);
+            (input, cache_read, cache_write)
+        };
+
+    let derived_total = input + cache_read + cache_write + raw.completion_tokens;
+    Usage {
+        input,
+        output: raw.completion_tokens,
+        cache_read,
+        cache_write,
+        reasoning: raw
+            .completion_tokens_details
+            .as_ref()
+            .and_then(|details| details.reasoning_tokens),
+        total_tokens: raw.total_tokens.unwrap_or(derived_total),
+        ..Usage::default()
+    }
+}
+
+fn clamp_openai_prompt_cache_key(key: &str) -> String {
+    key.chars()
+        .take(OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)
+        .collect()
+}
+
+fn build_request_body(
+    model: &Model,
+    context: &Context,
+    options: &crate::StreamOptions,
+    prompt_caching: OpenAiPromptCaching,
+) -> ChatRequest {
     use serde_json::{Value, json};
 
     let mut messages: Vec<Value> = Vec::new();
@@ -277,6 +367,10 @@ fn build_request_body(model: &Model, context: &Context, options: &crate::StreamO
         })
         .collect();
 
+    let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
+    let openai_cache = prompt_caching == OpenAiPromptCaching::OpenAi
+        && cache_retention != CacheRetention::Disabled;
+
     ChatRequest {
         model: model.id.clone(),
         messages,
@@ -285,6 +379,16 @@ fn build_request_body(model: &Model, context: &Context, options: &crate::StreamO
         stream_options: StreamOpts { include_usage: true },
         temperature: options.temperature,
         max_tokens: options.max_tokens,
+        prompt_cache_key: openai_cache
+            .then(|| {
+                options
+                    .session_id
+                    .as_deref()
+                    .map(clamp_openai_prompt_cache_key)
+            })
+            .flatten(),
+        prompt_cache_retention: (openai_cache && cache_retention == CacheRetention::Long)
+            .then_some("24h"),
     }
 }
 
@@ -300,6 +404,10 @@ struct ChatRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_retention: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -335,6 +443,8 @@ struct ChunkChoice {
     delta: Delta,
     #[serde(default)]
     finish_reason: Option<String>,
+    #[serde(default)]
+    usage: Option<ChunkUsage>,
 }
 
 #[derive(Deserialize, Default)]
@@ -372,7 +482,23 @@ struct ChunkUsage {
     #[serde(default)]
     completion_tokens: u64,
     #[serde(default)]
+    total_tokens: Option<u64>,
+    #[serde(default)]
     completion_tokens_details: Option<CompletionTokensDetails>,
+    #[serde(default)]
+    prompt_tokens_details: Option<PromptTokensDetails>,
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u64>,
+    #[serde(default)]
+    prompt_cache_miss_tokens: Option<u64>,
+}
+
+#[derive(Deserialize, Default)]
+struct PromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: Option<u64>,
+    #[serde(default)]
+    cache_write_tokens: Option<u64>,
 }
 
 #[derive(Deserialize, Default)]
