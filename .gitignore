@@ -21,9 +21,6 @@ tarpaulin-report.html
 *.swo
 *~
 
-# Local agent settings
-/.claude/settings.local.json
-
 # Operating system files
 .DS_Store
 Thumbs.db

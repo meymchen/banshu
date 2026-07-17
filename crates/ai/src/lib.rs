@@ -27,8 +27,8 @@ mod stream;
 mod types;
 
 pub use error::{Error, Result};
-pub use options::StreamOptions;
-pub use provider::Provider;
+pub use options::{CacheRetention, StreamOptions};
+pub use provider::{OpenAiPromptCaching, Provider};
 pub use registry::Models;
 pub use stream::{AssistantMessageEvent, MessageStream};
 pub use types::*;
