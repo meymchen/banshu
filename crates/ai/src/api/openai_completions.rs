@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::{ApiRequest, ChatApi, compute_cost, fail, parse_arguments};
 use crate::CacheRetention;
 use crate::http;
-use crate::provider::OpenAiPromptCaching;
+use crate::provider::{OpenAiCompat, OpenAiPromptCaching};
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
     AssistantContent, AssistantMessage, Context, Message, Model, StopReason, TextContent,
@@ -32,7 +32,7 @@ impl ChatApi for OpenAiCompletions {
             request.model,
             request.context,
             request.options,
-            request.openai_prompt_caching,
+            request.openai_compat,
         );
         let url = format!(
             "{}/chat/completions",
@@ -53,7 +53,7 @@ impl ChatApi for OpenAiCompletions {
             .cache_retention
             .unwrap_or(CacheRetention::Short);
         let session_id = request.options.session_id.clone();
-        let prompt_caching = request.openai_prompt_caching;
+        let prompt_caching = request.openai_compat.prompt_caching;
 
         let stream = async_stream::stream! {
             let mut message = AssistantMessage::streaming(&model_id, &provider, API_NAME);
@@ -107,6 +107,7 @@ impl ChatApi for OpenAiCompletions {
             };
 
             let mut thinking = String::new();
+            let mut thinking_source: Option<String> = None;
             let mut text = String::new();
             let mut tools: Vec<ToolAccum> = Vec::new();
             let mut usage = Usage::default();
@@ -140,11 +141,24 @@ impl ChatApi for OpenAiCompletions {
                     usage = normalize_usage(chunk_usage);
                 }
                 if let Some(choice) = parsed.choices.into_iter().next() {
-                    if let Some(reasoning) = choice.delta.reasoning_content
-                        && !reasoning.is_empty()
-                    {
+                    // Endpoints disagree on the reasoning field name; take the
+                    // first non-empty one (some send duplicates) and remember
+                    // it as the block's signature so replay can use it.
+                    let reasoning_delta = [
+                        ("reasoning_content", &choice.delta.reasoning_content),
+                        ("reasoning", &choice.delta.reasoning),
+                        ("reasoning_text", &choice.delta.reasoning_text),
+                    ]
+                    .into_iter()
+                    .find_map(|(field, value)| {
+                        let value = value.as_deref().filter(|v| !v.is_empty())?;
+                        Some((field, value.to_string()))
+                    });
+                    if let Some((field, reasoning)) = reasoning_delta {
+                        thinking_source.get_or_insert_with(|| field.to_string());
                         thinking.push_str(&reasoning);
-                        message.content = partial_content(&thinking, &text);
+                        message.content =
+                            partial_content(&thinking, thinking_source.as_deref(), &text);
                         yield AssistantMessageEvent::ThinkingDelta {
                             content_index: 0,
                             delta: reasoning,
@@ -155,7 +169,8 @@ impl ChatApi for OpenAiCompletions {
                         && !delta.is_empty()
                     {
                         text.push_str(&delta);
-                        message.content = partial_content(&thinking, &text);
+                        message.content =
+                            partial_content(&thinking, thinking_source.as_deref(), &text);
                         yield AssistantMessageEvent::TextDelta {
                             content_index: 0,
                             delta,
@@ -190,7 +205,7 @@ impl ChatApi for OpenAiCompletions {
             message.usage = usage;
             message.stop_reason = stop_reason;
 
-            let mut content = partial_content(&thinking, &text);
+            let mut content = partial_content(&thinking, thinking_source.as_deref(), &text);
             for accum in tools {
                 if accum.is_empty() {
                     continue;
@@ -220,12 +235,18 @@ impl ChatApi for OpenAiCompletions {
 
 /// Build ordered content from accumulated thinking and text: thinking first
 /// (it streams before the answer), then text. Empty sections are omitted.
-fn partial_content(thinking: &str, text: &str) -> Vec<AssistantContent> {
+/// The thinking block's signature records the wire field the reasoning
+/// arrived in, so replay can write it back under the same field.
+fn partial_content(
+    thinking: &str,
+    thinking_source: Option<&str>,
+    text: &str,
+) -> Vec<AssistantContent> {
     let mut content = Vec::new();
     if !thinking.is_empty() {
         content.push(AssistantContent::Thinking(ThinkingContent {
             thinking: thinking.to_string(),
-            signature: None,
+            signature: thinking_source.map(str::to_string),
             redacted: false,
         }));
     }
@@ -328,7 +349,7 @@ fn build_request_body(
     model: &Model,
     context: &Context,
     options: &crate::StreamOptions,
-    prompt_caching: OpenAiPromptCaching,
+    compat: OpenAiCompat,
 ) -> ChatRequest {
     use serde_json::{Value, json};
 
@@ -367,6 +388,36 @@ fn build_request_body(
                 if !tool_calls.is_empty() {
                     wire["tool_calls"] = Value::Array(tool_calls);
                 }
+                // Replay thinking under the wire field it arrived in (recorded
+                // as the block's signature at capture time); signatureless
+                // thinking has nowhere faithful to go and is dropped.
+                let thinking: Vec<&ThinkingContent> = assistant
+                    .content
+                    .iter()
+                    .filter_map(|content| match content {
+                        AssistantContent::Thinking(block) if !block.thinking.trim().is_empty() => {
+                            Some(block)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(field) = thinking
+                    .first()
+                    .and_then(|block| block.signature.as_deref())
+                    .filter(|field| !field.is_empty())
+                {
+                    let joined: Vec<&str> = thinking
+                        .iter()
+                        .map(|block| block.thinking.as_str())
+                        .collect();
+                    wire[field] = Value::String(joined.join("\n"));
+                }
+                if compat.requires_reasoning_content_on_assistant_messages
+                    && model.reasoning
+                    && wire.get("reasoning_content").is_none()
+                {
+                    wire["reasoning_content"] = Value::String(String::new());
+                }
                 messages.push(wire);
             }
             Message::ToolResult(result) => {
@@ -393,7 +444,7 @@ fn build_request_body(
         .collect();
 
     let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
-    let openai_cache = prompt_caching == OpenAiPromptCaching::OpenAi
+    let openai_cache = compat.prompt_caching == OpenAiPromptCaching::OpenAi
         && cache_retention != CacheRetention::Disabled;
 
     ChatRequest {
@@ -480,6 +531,10 @@ struct Delta {
     content: Option<String>,
     #[serde(default)]
     reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    reasoning_text: Option<String>,
     #[serde(default)]
     tool_calls: Vec<ToolCallDelta>,
 }
