@@ -33,9 +33,14 @@ pub struct ApiRequest<'a> {
 
 /// Mark `message` as failed and produce the terminal in-band `Error` event.
 /// Shared by every protocol implementation.
-pub(crate) fn fail(message: &mut AssistantMessage, detail: &str) -> AssistantMessageEvent {
+pub(crate) fn fail(
+    message: &mut AssistantMessage,
+    kind: crate::ErrorKind,
+    detail: &str,
+) -> AssistantMessageEvent {
     message.stop_reason = StopReason::Error;
     message.error_message = Some(detail.to_string());
+    message.error_kind = Some(kind);
     AssistantMessageEvent::Error {
         reason: StopReason::Error,
         error: message.clone(),

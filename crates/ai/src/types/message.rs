@@ -3,6 +3,7 @@
 use super::content::{AssistantContent, TextContent, UserContent};
 use super::now_ms;
 use super::usage::Usage;
+use crate::error::ErrorKind;
 
 /// Why a completion stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,8 @@ pub struct AssistantMessage {
     pub stop_reason: StopReason,
     /// Human-readable error, set when `stop_reason` is `Error`/`Aborted`.
     pub error_message: Option<String>,
+    /// Structured classification of the failure, set alongside `error_message`.
+    pub error_kind: Option<ErrorKind>,
     /// Unix timestamp in milliseconds.
     pub timestamp: i64,
 }
@@ -89,6 +92,7 @@ impl AssistantMessage {
             usage: Usage::default(),
             stop_reason: StopReason::ToolUse,
             error_message: None,
+            error_kind: None,
             timestamp: now_ms(),
         }
     }
@@ -104,6 +108,7 @@ impl AssistantMessage {
             usage: Usage::default(),
             stop_reason: StopReason::Stop,
             error_message: None,
+            error_kind: None,
             timestamp: now_ms(),
         }
     }
