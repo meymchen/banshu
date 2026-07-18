@@ -44,6 +44,10 @@ impl ChatApi for OpenAiCompletions {
         let provider = request.model.provider.clone();
         let cost = request.model.cost.clone();
         let timeout = request.options.timeout;
+        let max_retries = request
+            .options
+            .max_retries
+            .unwrap_or(http::DEFAULT_MAX_RETRIES);
         let cache_retention = request
             .options
             .cache_retention
@@ -56,7 +60,7 @@ impl ChatApi for OpenAiCompletions {
             yield AssistantMessageEvent::Start { partial: message.clone() };
 
             let Some(api_key) = api_key else {
-                yield fail(&mut message, "no API key configured");
+                yield fail(&mut message, crate::ErrorKind::Api, "no API key configured");
                 return;
             };
 
@@ -74,20 +78,33 @@ impl ChatApi for OpenAiCompletions {
                 builder = builder.timeout(timeout);
             }
 
-            let response = match builder.send().await {
-                Ok(response) => response,
-                Err(err) => {
-                    yield fail(&mut message, &format!("request failed: {err}"));
-                    return;
+            // Bounded pre-stream retry: once SSE decoding starts below, no
+            // attempt is ever re-sent.
+            let mut attempt: u32 = 0;
+            let response = loop {
+                let this_attempt = builder
+                    .try_clone()
+                    .expect("JSON request bodies are cloneable");
+                match http::send_once(this_attempt).await {
+                    Ok(response) => break response,
+                    Err(failure) if failure.kind.is_retryable() && attempt < max_retries => {
+                        attempt += 1;
+                        let delay = http::retry_delay(attempt, failure.retry_after);
+                        yield AssistantMessageEvent::Retry {
+                            attempt,
+                            max_attempts: max_retries + 1,
+                            delay,
+                            kind: failure.kind,
+                            partial: message.clone(),
+                        };
+                        tokio::time::sleep(delay).await;
+                    }
+                    Err(failure) => {
+                        yield fail(&mut message, failure.kind, &failure.detail);
+                        return;
+                    }
                 }
             };
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let detail = response.text().await.unwrap_or_default();
-                yield fail(&mut message, &format!("HTTP {status}: {detail}"));
-                return;
-            }
 
             let mut thinking = String::new();
             let mut text = String::new();
@@ -101,7 +118,11 @@ impl ChatApi for OpenAiCompletions {
                 let data = match data {
                     Ok(data) => data,
                     Err(err) => {
-                        yield fail(&mut message, &format!("stream error: {err}"));
+                        yield fail(
+                            &mut message,
+                            crate::ErrorKind::StreamInterrupted,
+                            &format!("stream error: {err}"),
+                        );
                         return;
                     }
                 };

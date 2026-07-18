@@ -26,7 +26,7 @@ mod registry;
 mod stream;
 mod types;
 
-pub use error::{Error, Result};
+pub use error::{Error, ErrorKind, Result};
 pub use options::{CacheRetention, StreamOptions};
 pub use provider::{OpenAiPromptCaching, Provider};
 pub use registry::Models;
