@@ -24,7 +24,8 @@ async fn computes_cost_from_model_rates() {
         .mount(&server)
         .await;
 
-    let provider = Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
+    let provider =
+        Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
     let mut model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     // DeepSeek-style published rates ($/1M tokens).
     model.cost = ModelCost {
@@ -39,7 +40,10 @@ async fn computes_cost_from_model_rates() {
         ..Default::default()
     };
 
-    let message = provider.stream(&model, &context, &options).final_message().await;
+    let message = provider
+        .stream(&model, &context, &options)
+        .final_message()
+        .await;
 
     let cost = &message.usage.cost;
     let close = |a: f64, b: f64| (a - b).abs() < 1e-9;

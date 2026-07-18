@@ -93,9 +93,7 @@ pub(crate) fn retry_delay(attempt: u32, retry_after: Option<Duration>) -> Durati
 
 /// Build the default shared HTTP client.
 pub(crate) fn build_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .build()
-        .unwrap_or_default()
+    reqwest::Client::builder().build().unwrap_or_default()
 }
 
 /// Decode an SSE response body into its `data:` payloads, one per yielded item.

@@ -3,6 +3,7 @@ name = "banshu-ai"
 description = "Unified LLM API for open-source models and providers (DeepSeek, Z.AI, MiniMax, Moonshot, and any OpenAI/Anthropic-compatible API)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

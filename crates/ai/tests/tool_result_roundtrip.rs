@@ -16,9 +16,9 @@ fn history() -> Context {
     });
     Context::new()
         .user("weather in Paris?")
-        .with_message(Message::Assistant(Box::new(AssistantMessage::from_content(
-            vec![tool_call],
-        ))))
+        .with_message(Message::Assistant(Box::new(
+            AssistantMessage::from_content(vec![tool_call]),
+        )))
         .tool_result("call_1", "get_weather", "72F and sunny")
 }
 
@@ -52,8 +52,14 @@ async fn openai_serializes_assistant_tool_call_and_tool_result() {
 
     let provider = Provider::openai_compatible("d", "D", server.uri(), ["X"]);
     let model = Model::openai_completions("m").with_base_url(server.uri());
-    let options = StreamOptions { api_key: Some("k".into()), ..Default::default() };
-    provider.stream(&model, &history(), &options).final_message().await;
+    let options = StreamOptions {
+        api_key: Some("k".into()),
+        ..Default::default()
+    };
+    provider
+        .stream(&model, &history(), &options)
+        .final_message()
+        .await;
 }
 
 #[tokio::test]
@@ -75,6 +81,12 @@ async fn anthropic_serializes_tool_use_and_tool_result() {
 
     let provider = Provider::anthropic_compatible("k", "K", server.uri(), ["X"]);
     let model = Model::anthropic_messages("m").with_base_url(server.uri());
-    let options = StreamOptions { api_key: Some("k".into()), ..Default::default() };
-    provider.stream(&model, &history(), &options).final_message().await;
+    let options = StreamOptions {
+        api_key: Some("k".into()),
+        ..Default::default()
+    };
+    provider
+        .stream(&model, &history(), &options)
+        .final_message()
+        .await;
 }
