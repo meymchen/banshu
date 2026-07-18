@@ -55,6 +55,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "bytes",
+ "fastrand",
  "futures",
  "futures-core",
  "futures-util",

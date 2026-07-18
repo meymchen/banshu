@@ -7,10 +7,12 @@
 
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
+use std::time::Duration;
 
 use futures_core::Stream;
 use futures_util::StreamExt;
 
+use crate::error::ErrorKind;
 use crate::types::{AssistantMessage, StopReason, ToolCall};
 
 /// A single incremental event in a streamed assistant response.
@@ -51,6 +53,21 @@ pub enum AssistantMessageEvent {
         /// Snapshot of the message so far.
         partial: AssistantMessage,
     },
+    /// The request failed before the response stream started and will be
+    /// re-sent after `delay`. Emitted so UIs can show retry progress instead
+    /// of a silent pause; consumers that don't care can ignore it.
+    Retry {
+        /// Which retry this is (1-based).
+        attempt: u32,
+        /// Total attempts the budget allows (initial request + retries).
+        max_attempts: u32,
+        /// How long the stream will sleep before re-sending.
+        delay: Duration,
+        /// Classification of the failure that triggered the retry.
+        kind: ErrorKind,
+        /// Snapshot of the (still empty) message.
+        partial: AssistantMessage,
+    },
     /// Terminal success — the final assembled message.
     Done {
         /// Why the completion stopped (`Stop`, `Length`, or `ToolUse`).
@@ -86,6 +103,7 @@ impl MessageStream {
         let mut message = AssistantMessage::streaming(model, provider, "");
         message.stop_reason = StopReason::Error;
         message.error_message = Some(detail.to_string());
+        message.error_kind = Some(ErrorKind::Api);
         let event = AssistantMessageEvent::Error {
             reason: StopReason::Error,
             error: message,
