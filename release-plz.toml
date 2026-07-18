@@ -15,3 +15,4 @@ git_release_name = "v{{ version }}"
 [[package]]
 name = "xtask"
 release = false
+publish = false
