@@ -105,32 +105,62 @@ impl Provider {
 
     /// DeepSeek — OpenAI-compatible, `DEEPSEEK_API_KEY`.
     pub fn deepseek() -> Self {
-        Self::openai_compatible("deepseek", "DeepSeek", "https://api.deepseek.com", ["DEEPSEEK_API_KEY"])
+        Self::openai_compatible(
+            "deepseek",
+            "DeepSeek",
+            "https://api.deepseek.com",
+            ["DEEPSEEK_API_KEY"],
+        )
     }
 
     /// Z.AI (GLM coding plan) — OpenAI-compatible, `ZAI_API_KEY`.
     pub fn zai() -> Self {
-        Self::openai_compatible("zai", "Z.AI", "https://api.z.ai/api/coding/paas/v4", ["ZAI_API_KEY"])
+        Self::openai_compatible(
+            "zai",
+            "Z.AI",
+            "https://api.z.ai/api/coding/paas/v4",
+            ["ZAI_API_KEY"],
+        )
     }
 
     /// MiniMax — Anthropic-compatible, `MINIMAX_API_KEY`.
     pub fn minimax() -> Self {
-        Self::anthropic_compatible("minimax", "MiniMax", "https://api.minimax.io/anthropic", ["MINIMAX_API_KEY"])
+        Self::anthropic_compatible(
+            "minimax",
+            "MiniMax",
+            "https://api.minimax.io/anthropic",
+            ["MINIMAX_API_KEY"],
+        )
     }
 
     /// Moonshot AI — OpenAI-compatible, `MOONSHOT_API_KEY`.
     pub fn moonshot() -> Self {
-        Self::openai_compatible("moonshot", "Moonshot AI", "https://api.moonshot.ai/v1", ["MOONSHOT_API_KEY"])
+        Self::openai_compatible(
+            "moonshot",
+            "Moonshot AI",
+            "https://api.moonshot.ai/v1",
+            ["MOONSHOT_API_KEY"],
+        )
     }
 
     /// Kimi For Coding — Anthropic-compatible, `KIMI_API_KEY`.
     pub fn kimi() -> Self {
-        Self::anthropic_compatible("kimi", "Kimi For Coding", "https://api.kimi.com/coding", ["KIMI_API_KEY"])
+        Self::anthropic_compatible(
+            "kimi",
+            "Kimi For Coding",
+            "https://api.kimi.com/coding",
+            ["KIMI_API_KEY"],
+        )
     }
 
     /// Xiaomi MiMo — OpenAI-compatible, `XIAOMI_API_KEY`.
     pub fn xiaomi() -> Self {
-        Self::openai_compatible("xiaomi", "Xiaomi MiMo", "https://api.xiaomimimo.com/v1", ["XIAOMI_API_KEY"])
+        Self::openai_compatible(
+            "xiaomi",
+            "Xiaomi MiMo",
+            "https://api.xiaomimimo.com/v1",
+            ["XIAOMI_API_KEY"],
+        )
     }
 
     /// The provider id.

@@ -64,6 +64,11 @@ fn vendor_constructors_carry_the_right_metadata() {
         assert_eq!(provider.id(), vendor.id);
         assert_eq!(provider.name(), vendor.name);
         assert_eq!(provider.base_url(), vendor.base_url);
-        assert_eq!(provider.api_kind(), vendor.api, "wrong protocol for {}", vendor.id);
+        assert_eq!(
+            provider.api_kind(),
+            vendor.api,
+            "wrong protocol for {}",
+            vendor.id
+        );
     }
 }

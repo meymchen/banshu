@@ -11,7 +11,9 @@ mod model;
 mod tool;
 mod usage;
 
-pub use content::{AssistantContent, ImageContent, TextContent, ThinkingContent, ToolCall, UserContent};
+pub use content::{
+    AssistantContent, ImageContent, TextContent, ThinkingContent, ToolCall, UserContent,
+};
 pub use context::Context;
 pub use message::{AssistantMessage, Message, StopReason, ToolResultMessage, UserMessage};
 pub use model::{ApiKind, Modality, Model, ModelCost};

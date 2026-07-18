@@ -52,9 +52,15 @@ async fn openai_completions_sends_tool_definitions() {
     let provider = Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["X"]);
     let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     let context = Context::new().user("weather?").with_tool(weather_tool());
-    let options = StreamOptions { api_key: Some("k".into()), ..Default::default() };
+    let options = StreamOptions {
+        api_key: Some("k".into()),
+        ..Default::default()
+    };
 
-    provider.stream(&model, &context, &options).final_message().await;
+    provider
+        .stream(&model, &context, &options)
+        .final_message()
+        .await;
 }
 
 #[tokio::test]
@@ -77,7 +83,13 @@ async fn anthropic_messages_sends_tool_definitions() {
     let provider = Provider::anthropic_compatible("kimi", "Kimi", server.uri(), ["X"]);
     let model = Model::anthropic_messages("k2p5").with_base_url(server.uri());
     let context = Context::new().user("weather?").with_tool(weather_tool());
-    let options = StreamOptions { api_key: Some("k".into()), ..Default::default() };
+    let options = StreamOptions {
+        api_key: Some("k".into()),
+        ..Default::default()
+    };
 
-    provider.stream(&model, &context, &options).final_message().await;
+    provider
+        .stream(&model, &context, &options)
+        .final_message()
+        .await;
 }

@@ -10,7 +10,9 @@ fn get_looks_up_models_by_provider_and_id() {
         .with_provider(Provider::deepseek())
         .with_provider(Provider::kimi());
 
-    let found = models.get("deepseek", "deepseek-chat").expect("known model");
+    let found = models
+        .get("deepseek", "deepseek-chat")
+        .expect("known model");
     assert_eq!(found.provider, "deepseek");
     assert_eq!(found.api, ApiKind::OpenAiCompletions);
 
@@ -85,7 +87,11 @@ async fn stream_for_an_unregistered_provider_is_an_in_band_error() {
     let model = Model::openai_completions("orphan").with_base_url("http://127.0.0.1:0");
 
     let message = models
-        .stream(&model, &Context::new().user("hi"), &StreamOptions::default())
+        .stream(
+            &model,
+            &Context::new().user("hi"),
+            &StreamOptions::default(),
+        )
         .final_message()
         .await;
 

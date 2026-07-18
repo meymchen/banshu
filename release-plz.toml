@@ -1,0 +1,17 @@
+[workspace]
+# Lockstep versioning: one tag/release per workspace version, so disable
+# per-crate tags by default and enable them only on the main crate below.
+git_tag_enable = false
+git_release_enable = false
+pr_labels = ["release"]
+
+[[package]]
+name = "banshu-ai"
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+git_release_enable = true
+git_release_name = "v{{ version }}"
+
+[[package]]
+name = "xtask"
+release = false

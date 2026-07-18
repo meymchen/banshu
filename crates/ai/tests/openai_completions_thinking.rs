@@ -29,7 +29,8 @@ async fn assembles_thinking_then_text() {
         .mount(&server)
         .await;
 
-    let provider = Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
+    let provider =
+        Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
     let model = Model::openai_completions("deepseek-reasoner").with_base_url(server.uri());
     let context = Context::new().user("What is 2 + 2?");
     let options = StreamOptions {
@@ -37,7 +38,10 @@ async fn assembles_thinking_then_text() {
         ..Default::default()
     };
 
-    let message = provider.stream(&model, &context, &options).final_message().await;
+    let message = provider
+        .stream(&model, &context, &options)
+        .final_message()
+        .await;
 
     assert_eq!(message.stop_reason, StopReason::Stop);
     assert_eq!(message.text(), "The answer is 4.");

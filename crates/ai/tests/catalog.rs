@@ -21,7 +21,10 @@ fn deepseek_catalog_loads_with_provider_metadata() {
     assert_eq!(chat.base_url, provider.base_url());
     assert_eq!(chat.api, ApiKind::OpenAiCompletions);
     assert!(chat.input.contains(&Modality::Text));
-    assert!(chat.context_window > 0, "context window should be populated");
+    assert!(
+        chat.context_window > 0,
+        "context window should be populated"
+    );
     assert!(chat.cost.input > 0.0, "input cost should be populated");
 }
 

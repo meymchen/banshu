@@ -34,7 +34,8 @@ async fn streams_a_minimal_text_completion() {
         .mount(&server)
         .await;
 
-    let provider = Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
+    let provider =
+        Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
     let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     let context = Context::new().user("Say hi");
     let options = StreamOptions {
@@ -42,7 +43,10 @@ async fn streams_a_minimal_text_completion() {
         ..Default::default()
     };
 
-    let message = provider.stream(&model, &context, &options).final_message().await;
+    let message = provider
+        .stream(&model, &context, &options)
+        .final_message()
+        .await;
 
     assert_eq!(message.stop_reason, StopReason::Stop);
     assert_eq!(message.text(), "Hello, world!");

@@ -20,7 +20,8 @@ async fn http_error_status_becomes_a_terminal_error_message() {
         .mount(&server)
         .await;
 
-    let provider = Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
+    let provider =
+        Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
     let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     let context = Context::new().user("hi");
     let options = StreamOptions {
@@ -28,11 +29,17 @@ async fn http_error_status_becomes_a_terminal_error_message() {
         ..Default::default()
     };
 
-    let message = provider.stream(&model, &context, &options).final_message().await;
+    let message = provider
+        .stream(&model, &context, &options)
+        .final_message()
+        .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
     let error = message.error_message.expect("expected an error message");
-    assert!(error.contains("401"), "error should mention the status: {error}");
+    assert!(
+        error.contains("401"),
+        "error should mention the status: {error}"
+    );
     assert!(
         error.contains("invalid api key"),
         "error should include the provider body: {error}"

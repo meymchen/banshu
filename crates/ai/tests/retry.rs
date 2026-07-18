@@ -181,9 +181,10 @@ async fn kimi_style_quota_403_is_terminal_without_retry() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(ResponseTemplate::new(403).set_body_string(
-            "You've reached your usage limit for this billing cycle",
-        ))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .set_body_string("You've reached your usage limit for this billing cycle"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -234,7 +235,11 @@ async fn retry_budget_is_bounded() {
     };
     assert_eq!(error.error_kind, Some(ErrorKind::ServerError));
     assert!(
-        error.error_message.as_deref().unwrap_or_default().contains("503"),
+        error
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("503"),
         "terminal error should carry the status"
     );
 }

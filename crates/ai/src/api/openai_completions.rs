@@ -359,7 +359,11 @@ fn build_request_body(
                     .collect();
                 let text = assistant.text();
                 let mut wire = json!({ "role": "assistant" });
-                wire["content"] = if text.is_empty() { Value::Null } else { Value::String(text) };
+                wire["content"] = if text.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(text)
+                };
                 if !tool_calls.is_empty() {
                     wire["tool_calls"] = Value::Array(tool_calls);
                 }
@@ -397,7 +401,9 @@ fn build_request_body(
         messages,
         tools,
         stream: true,
-        stream_options: StreamOpts { include_usage: true },
+        stream_options: StreamOpts {
+            include_usage: true,
+        },
         temperature: options.temperature,
         max_tokens: options.max_tokens,
         prompt_cache_key: openai_cache
