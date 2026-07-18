@@ -5,7 +5,9 @@
 //! Response side: cache read/write token usage, including 1h cache writes
 //! billed at twice the input rate.
 
-use banshu_ai::{CacheRetention, Context, Model, ModelCost, Provider, StreamOptions, Tool};
+use banshu_ai::{
+    AnthropicCompat, CacheRetention, Context, Model, ModelCost, Provider, StreamOptions, Tool,
+};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -212,4 +214,37 @@ async fn reads_cache_usage_and_bills_one_hour_writes_at_twice_the_input_rate() {
     assert!((message.usage.cost.cache_read - 0.1).abs() < 1e-12);
     // 300k short writes at the cache-write rate + 200k 1h writes at 2x input.
     assert!((message.usage.cost.cache_write - 0.775).abs() < 1e-12);
+}
+
+#[tokio::test]
+async fn sends_session_affinity_header_only_when_declared_and_caching() {
+    for (declared, retention, expected) in [
+        (true, CacheRetention::Short, Some("conversation-42")),
+        (true, CacheRetention::Disabled, None),
+        (false, CacheRetention::Short, None),
+    ] {
+        let server = MockServer::start().await;
+        mount_sse(&server, STOP_BODY).await;
+
+        let provider = provider(&server).with_anthropic_compat(AnthropicCompat {
+            send_session_affinity_headers: declared,
+            ..AnthropicCompat::default()
+        });
+        let options = StreamOptions {
+            cache_retention: Some(retention),
+            session_id: Some("conversation-42".into()),
+            ..options()
+        };
+        provider
+            .stream(&model(&server), &Context::new().user("hi"), &options)
+            .final_message()
+            .await;
+
+        let requests = server.received_requests().await.expect("request journal");
+        let header = requests[0]
+            .headers
+            .get("x-session-affinity")
+            .map(|v| v.to_str().unwrap().to_owned());
+        assert_eq!(header.as_deref(), expected);
+    }
 }

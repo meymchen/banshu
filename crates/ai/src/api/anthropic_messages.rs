@@ -12,6 +12,7 @@ use serde_json::Value;
 use super::{ApiRequest, ChatApi, compute_cost, fail, parse_arguments};
 use crate::CacheRetention;
 use crate::http;
+use crate::provider::AnthropicCompat;
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
     AssistantContent, AssistantMessage, Context, Message, Model, StopReason, TextContent,
@@ -27,7 +28,12 @@ const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 impl ChatApi for AnthropicMessages {
     fn stream(&self, request: ApiRequest<'_>) -> MessageStream {
-        let body = build_request_body(request.model, request.context, request.options);
+        let body = build_request_body(
+            request.model,
+            request.context,
+            request.options,
+            request.anthropic_compat,
+        );
         let url = format!(
             "{}/v1/messages",
             request.model.base_url.trim_end_matches('/')
@@ -42,6 +48,16 @@ impl ChatApi for AnthropicMessages {
             .options
             .max_retries
             .unwrap_or(http::DEFAULT_MAX_RETRIES);
+        // Session affinity routes prompt-cache hits to the same replica; it
+        // serves nothing when caching is disabled.
+        let caching = request
+            .options
+            .cache_retention
+            .unwrap_or(CacheRetention::Short)
+            != CacheRetention::Disabled;
+        let session_affinity = (request.anthropic_compat.send_session_affinity_headers && caching)
+            .then(|| request.options.session_id.clone())
+            .flatten();
 
         let stream = async_stream::stream! {
             let mut message = AssistantMessage::streaming(&model_id, &provider, API_NAME);
@@ -57,6 +73,9 @@ impl ChatApi for AnthropicMessages {
                 .header("x-api-key", api_key)
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .json(&body);
+            if let Some(session_id) = session_affinity {
+                builder = builder.header("x-session-affinity", session_id);
+            }
             if let Some(timeout) = timeout {
                 builder = builder.timeout(timeout);
             }
@@ -128,6 +147,14 @@ impl ChatApi for AnthropicMessages {
                             Some("thinking") => BlockAccum::Thinking {
                                 text: String::new(),
                                 signature: None,
+                                redacted: false,
+                            },
+                            // Redacted thinking arrives whole: an opaque
+                            // payload carried in the signature slot.
+                            Some("redacted_thinking") => BlockAccum::Thinking {
+                                text: String::new(),
+                                signature: block["data"].as_str().map(str::to_string),
+                                redacted: true,
                             },
                             Some("tool_use") => BlockAccum::ToolCall {
                                 id: block["id"].as_str().unwrap_or_default().to_string(),
@@ -230,6 +257,7 @@ enum BlockAccum {
     Thinking {
         text: String,
         signature: Option<String>,
+        redacted: bool,
     },
     ToolCall {
         id: String,
@@ -250,11 +278,15 @@ fn assemble(blocks: &[BlockAccum]) -> Vec<AssistantContent> {
                     signature: None,
                 }))
             }
-            BlockAccum::Thinking { text, signature } if !text.is_empty() => {
+            BlockAccum::Thinking {
+                text,
+                signature,
+                redacted,
+            } if !text.is_empty() || *redacted => {
                 Some(AssistantContent::Thinking(ThinkingContent {
                     thinking: text.clone(),
                     signature: signature.clone(),
-                    redacted: false,
+                    redacted: *redacted,
                 }))
             }
             BlockAccum::ToolCall {
@@ -269,6 +301,33 @@ fn assemble(blocks: &[BlockAccum]) -> Vec<AssistantContent> {
             _ => None,
         })
         .collect()
+}
+
+/// Serialize a thinking block for history replay. Redacted payloads go back
+/// verbatim as `redacted_thinking`; signed thinking keeps its signature;
+/// signatureless thinking (e.g. from an aborted stream) is downgraded to a
+/// text block unless the provider accepts empty signatures.
+fn replay_thinking(block: &ThinkingContent, compat: AnthropicCompat) -> Option<Value> {
+    if block.redacted {
+        return Some(serde_json::json!({
+            "type": "redacted_thinking",
+            "data": block.signature.clone().unwrap_or_default(),
+        }));
+    }
+    let signature = block.signature.as_deref().unwrap_or("");
+    let has_signature = !signature.trim().is_empty();
+    if block.thinking.trim().is_empty() && !has_signature {
+        return None;
+    }
+    if has_signature || compat.allow_empty_signature {
+        Some(serde_json::json!({
+            "type": "thinking",
+            "thinking": block.thinking,
+            "signature": if has_signature { signature } else { "" },
+        }))
+    } else {
+        Some(serde_json::json!({ "type": "text", "text": block.thinking }))
+    }
 }
 
 /// Map an Anthropic `stop_reason` to a banshu [`StopReason`].
@@ -294,6 +353,7 @@ fn build_request_body(
     model: &Model,
     context: &Context,
     options: &crate::StreamOptions,
+    compat: AnthropicCompat,
 ) -> MessagesRequest {
     let cache_control = cache_control(options);
     let mut messages: Vec<Value> = Vec::new();
@@ -317,7 +377,7 @@ fn build_request_body(
                             "name": call.name,
                             "input": call.arguments,
                         })),
-                        // Thinking blocks are not replayed for now.
+                        AssistantContent::Thinking(block) => replay_thinking(block, compat),
                         _ => None,
                     })
                     .collect();
