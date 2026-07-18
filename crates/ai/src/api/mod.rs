@@ -8,7 +8,7 @@ pub mod anthropic_messages;
 pub mod openai_completions;
 
 use crate::options::StreamOptions;
-use crate::provider::OpenAiPromptCaching;
+use crate::provider::{AnthropicCompat, OpenAiCompat};
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{AssistantMessage, Context, Cost, Model, ModelCost, StopReason, Usage};
 
@@ -27,8 +27,10 @@ pub struct ApiRequest<'a> {
     pub api_key: Option<String>,
     /// Shared HTTP client.
     pub http: reqwest::Client,
-    /// OpenAI-compatible prompt-cache controls declared by the provider.
-    pub openai_prompt_caching: OpenAiPromptCaching,
+    /// Endpoint quirks declared by an OpenAI-compatible provider.
+    pub openai_compat: OpenAiCompat,
+    /// Endpoint quirks declared by an Anthropic-compatible provider.
+    pub anthropic_compat: AnthropicCompat,
 }
 
 /// Mark `message` as failed and produce the terminal in-band `Error` event.

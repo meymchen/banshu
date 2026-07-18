@@ -28,6 +28,29 @@ pub enum OpenAiPromptCaching {
     SessionAffinityHeaders,
 }
 
+/// Endpoint quirks declared by an OpenAI-compatible provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OpenAiCompat {
+    /// Request-side prompt-cache controls.
+    pub prompt_caching: OpenAiPromptCaching,
+    /// Every replayed assistant message must carry a `reasoning_content`
+    /// field (`""` when it produced no thinking) while a reasoning model is
+    /// active. DeepSeek requires this.
+    pub requires_reasoning_content_on_assistant_messages: bool,
+}
+
+/// Endpoint quirks declared by an Anthropic-compatible provider.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnthropicCompat {
+    /// Replay signatureless thinking as `signature: ""` instead of
+    /// downgrading it to a text block. Some compatible providers emit and
+    /// accept empty signatures.
+    pub allow_empty_signature: bool,
+    /// Send `x-session-affinity` from the session id when caching is enabled,
+    /// for providers that route prompt-cache hits by replica.
+    pub send_session_affinity_headers: bool,
+}
+
 /// A configured provider: metadata + auth + a wire-protocol handle.
 pub struct Provider {
     id: String,
@@ -37,7 +60,8 @@ pub struct Provider {
     api_kind: ApiKind,
     api: Arc<dyn ChatApi>,
     http: reqwest::Client,
-    openai_prompt_caching: OpenAiPromptCaching,
+    openai_compat: OpenAiCompat,
+    anthropic_compat: AnthropicCompat,
 }
 
 impl Provider {
@@ -59,7 +83,8 @@ impl Provider {
             api_kind: ApiKind::OpenAiCompletions,
             api: Arc::new(OpenAiCompletions),
             http: http::build_client(),
-            openai_prompt_caching: OpenAiPromptCaching::Automatic,
+            openai_compat: OpenAiCompat::default(),
+            anthropic_compat: AnthropicCompat::default(),
         }
     }
 
@@ -81,14 +106,27 @@ impl Provider {
             api_kind: ApiKind::AnthropicMessages,
             api: Arc::new(AnthropicMessages),
             http: http::build_client(),
-            openai_prompt_caching: OpenAiPromptCaching::Automatic,
+            openai_compat: OpenAiCompat::default(),
+            anthropic_compat: AnthropicCompat::default(),
         }
+    }
+
+    /// Configure the endpoint quirks of this OpenAI-compatible provider.
+    pub fn with_openai_compat(mut self, compat: OpenAiCompat) -> Self {
+        self.openai_compat = compat;
+        self
+    }
+
+    /// Configure the endpoint quirks of this Anthropic-compatible provider.
+    pub fn with_anthropic_compat(mut self, compat: AnthropicCompat) -> Self {
+        self.anthropic_compat = compat;
+        self
     }
 
     /// Configure the request-side prompt-cache controls accepted by this
     /// OpenAI-compatible provider.
     pub fn with_openai_prompt_caching(mut self, caching: OpenAiPromptCaching) -> Self {
-        self.openai_prompt_caching = caching;
+        self.openai_compat.prompt_caching = caching;
         self
     }
 
@@ -111,6 +149,10 @@ impl Provider {
             "https://api.deepseek.com",
             ["DEEPSEEK_API_KEY"],
         )
+        .with_openai_compat(OpenAiCompat {
+            requires_reasoning_content_on_assistant_messages: true,
+            ..OpenAiCompat::default()
+        })
     }
 
     /// Z.AI (GLM coding plan) — OpenAI-compatible, `ZAI_API_KEY`.
@@ -209,7 +251,8 @@ impl Provider {
             options,
             api_key,
             http: self.http.clone(),
-            openai_prompt_caching: self.openai_prompt_caching,
+            openai_compat: self.openai_compat,
+            anthropic_compat: self.anthropic_compat,
         })
     }
 
