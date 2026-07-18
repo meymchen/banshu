@@ -28,3 +28,6 @@ Desktop.ini
 
 # Logs
 *.log
+
+# Scratch files
+/.scratch/
