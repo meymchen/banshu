@@ -106,7 +106,10 @@ async fn long_retention_requests_the_one_hour_ttl() {
     let body = request_body(&server).await;
     let ephemeral_1h = json!({ "type": "ephemeral", "ttl": "1h" });
     assert_eq!(body["system"][0]["cache_control"], ephemeral_1h);
-    assert_eq!(body["messages"][0]["content"][0]["cache_control"], ephemeral_1h);
+    assert_eq!(
+        body["messages"][0]["content"][0]["cache_control"],
+        ephemeral_1h
+    );
 }
 
 #[tokio::test]
@@ -128,9 +131,19 @@ async fn disabled_retention_sends_no_cache_control() {
         .await;
 
     let body = request_body(&server).await;
-    assert_eq!(body["system"], json!([{ "type": "text", "text": "Be terse." }]));
-    assert_eq!(body["messages"][0], json!({ "role": "user", "content": "hi" }));
-    assert!(!serde_json::to_string(&body).expect("body").contains("cache_control"));
+    assert_eq!(
+        body["system"],
+        json!([{ "type": "text", "text": "Be terse." }])
+    );
+    assert_eq!(
+        body["messages"][0],
+        json!({ "role": "user", "content": "hi" })
+    );
+    assert!(
+        !serde_json::to_string(&body)
+            .expect("body")
+            .contains("cache_control")
+    );
 }
 
 #[tokio::test]
@@ -138,7 +151,10 @@ async fn attaches_the_breakpoint_to_a_trailing_tool_result() {
     let server = MockServer::start().await;
     mount_sse(&server, STOP_BODY).await;
 
-    let context = Context::new().user("weather?").tool_result("call_1", "get_weather", "72F and sunny");
+    let context =
+        Context::new()
+            .user("weather?")
+            .tool_result("call_1", "get_weather", "72F and sunny");
     provider(&server)
         .stream(&model(&server), &context, &options())
         .final_message()
@@ -150,7 +166,10 @@ async fn attaches_the_breakpoint_to_a_trailing_tool_result() {
     assert_eq!(last_block["type"], "tool_result");
     assert_eq!(last_block["cache_control"], json!({ "type": "ephemeral" }));
     // Earlier messages are untouched.
-    assert_eq!(messages[0], json!({ "role": "user", "content": "weather?" }));
+    assert_eq!(
+        messages[0],
+        json!({ "role": "user", "content": "weather?" })
+    );
 }
 
 #[tokio::test]

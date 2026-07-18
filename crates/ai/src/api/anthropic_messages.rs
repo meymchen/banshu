@@ -28,7 +28,10 @@ const DEFAULT_MAX_TOKENS: u32 = 4096;
 impl ChatApi for AnthropicMessages {
     fn stream(&self, request: ApiRequest<'_>) -> MessageStream {
         let body = build_request_body(request.model, request.context, request.options);
-        let url = format!("{}/v1/messages", request.model.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/messages",
+            request.model.base_url.trim_end_matches('/')
+        );
         let api_key = request.api_key.clone();
         let http_client = request.http.clone();
         let model_id = request.model.id.clone();
@@ -241,10 +244,12 @@ fn assemble(blocks: &[BlockAccum]) -> Vec<AssistantContent> {
     blocks
         .iter()
         .filter_map(|block| match block {
-            BlockAccum::Text(text) if !text.is_empty() => Some(AssistantContent::Text(TextContent {
-                text: text.clone(),
-                signature: None,
-            })),
+            BlockAccum::Text(text) if !text.is_empty() => {
+                Some(AssistantContent::Text(TextContent {
+                    text: text.clone(),
+                    signature: None,
+                }))
+            }
             BlockAccum::Thinking { text, signature } if !text.is_empty() => {
                 Some(AssistantContent::Thinking(ThinkingContent {
                     thinking: text.clone(),
@@ -295,7 +300,8 @@ fn build_request_body(
     for message in &context.messages {
         match message {
             Message::User(user) => {
-                messages.push(serde_json::json!({ "role": "user", "content": user.text_content() }));
+                messages
+                    .push(serde_json::json!({ "role": "user", "content": user.text_content() }));
             }
             Message::Assistant(assistant) => {
                 let blocks: Vec<Value> = assistant
@@ -381,9 +387,7 @@ fn build_request_body(
             name: tool.name.clone(),
             description: tool.description.clone(),
             input_schema: tool.parameters.clone(),
-            cache_control: cache_control
-                .clone()
-                .filter(|_| index + 1 == tool_count),
+            cache_control: cache_control.clone().filter(|_| index + 1 == tool_count),
         })
         .collect();
 
