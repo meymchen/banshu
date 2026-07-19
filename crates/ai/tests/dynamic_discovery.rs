@@ -56,7 +56,9 @@ async fn refresh_overrides_and_appends_models_dev_entries() {
     assert_eq!(entry.probe, RefreshOutcome::Skipped);
 
     // Same-id bundled entry is overridden by the refreshed metadata.
-    let chat = models.get("deepseek", "deepseek-chat").expect("known model");
+    let chat = models
+        .get("deepseek", "deepseek-chat")
+        .expect("known model");
     assert_eq!(chat.cost.input, 9.9);
     assert_eq!(chat.context_window, 131_072);
 
@@ -278,9 +280,8 @@ async fn provider_level_refresh_works_without_a_registry() {
         .mount(&server)
         .await;
 
-    let provider =
-        Provider::openai_compatible("solo", "Solo", server.uri(), ["SOLO_PROBE_KEY"])
-            .with_models_dev_id("solo");
+    let provider = Provider::openai_compatible("solo", "Solo", server.uri(), ["SOLO_PROBE_KEY"])
+        .with_models_dev_id("solo");
     let entry = provider
         .refresh_models_from(&format!("{}/api.json", server.uri()))
         .await;

@@ -329,7 +329,11 @@ impl Provider {
                     crate::api::anthropic_messages::ANTHROPIC_VERSION,
                 ),
         };
-        let response = match request.timeout(crate::discovery::DISCOVERY_TIMEOUT).send().await {
+        let response = match request
+            .timeout(crate::discovery::DISCOVERY_TIMEOUT)
+            .send()
+            .await
+        {
             Ok(response) => response,
             Err(err) => return RefreshOutcome::Failed(err.to_string()),
         };
