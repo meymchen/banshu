@@ -18,6 +18,7 @@
 pub mod api;
 pub mod provider;
 
+mod discovery;
 mod error;
 mod http;
 mod models;
@@ -26,6 +27,7 @@ mod registry;
 mod stream;
 mod types;
 
+pub use discovery::{RefreshEntry, RefreshOutcome, RefreshReport};
 pub use error::{Error, ErrorKind, Result};
 pub use options::{CacheRetention, StreamOptions};
 pub use provider::{AnthropicCompat, OpenAiCompat, OpenAiPromptCaching, Provider};
