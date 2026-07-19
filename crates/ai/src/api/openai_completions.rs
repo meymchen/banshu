@@ -214,6 +214,7 @@ impl ChatApi for OpenAiCompletions {
                     id: accum.id,
                     name: accum.name,
                     arguments: parse_arguments(&accum.arguments),
+                    raw_arguments: Some(accum.arguments),
                 };
                 let content_index = content.len();
                 content.push(AssistantContent::ToolCall(tool_call.clone()));
@@ -424,7 +425,7 @@ fn build_request_body(
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": result.tool_call_id,
-                    "content": result.content,
+                    "content": result.text_content(),
                 }));
             }
         }

@@ -38,6 +38,8 @@ pub struct ToolCall {
     pub name: String,
     /// Parsed tool arguments.
     pub arguments: serde_json::Value,
+    /// Original JSON text received from the provider, when available.
+    pub raw_arguments: Option<String>,
 }
 
 /// A content block produced by the assistant.

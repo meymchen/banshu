@@ -14,6 +14,11 @@ use futures::StreamExt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[test]
+fn protocol_errors_are_not_retryable() {
+    assert!(!ErrorKind::Protocol.is_retryable());
+}
+
 const OPENAI_SSE_BODY: &str = concat!(
     "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello, world!\"},\"finish_reason\":null}]}\n\n",
     "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n",

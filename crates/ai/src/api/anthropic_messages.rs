@@ -297,6 +297,7 @@ fn assemble(blocks: &[BlockAccum]) -> Vec<AssistantContent> {
                 id: id.clone(),
                 name: name.clone(),
                 arguments: parse_arguments(arguments),
+                raw_arguments: Some(arguments.clone()),
             })),
             _ => None,
         })
@@ -389,7 +390,7 @@ fn build_request_body(
                     "content": [{
                         "type": "tool_result",
                         "tool_use_id": result.tool_call_id,
-                        "content": result.content,
+                        "content": result.text_content(),
                         "is_error": result.is_error,
                     }],
                 }));

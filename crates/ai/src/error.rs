@@ -63,6 +63,9 @@ pub enum ErrorKind {
     /// The SSE stream failed after it had started. Never retried by this crate
     /// (the "pre-stream only" contract); callers decide whether to re-run.
     StreamInterrupted,
+    /// A wire state-machine, JSON, or termination-protocol error on top of a
+    /// valid HTTP/SSE response. Never retryable.
+    Protocol,
     /// Everything else: missing API key, an in-stream error event from the
     /// provider, unknown model dispatch. Not retryable.
     Api,
