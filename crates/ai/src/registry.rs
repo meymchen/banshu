@@ -3,6 +3,7 @@
 //! for: register providers once, then resolve and stream models by id without
 //! caring which provider owns them.
 
+use crate::discovery::{self, RefreshOutcome, RefreshReport};
 use crate::options::StreamOptions;
 use crate::provider::Provider;
 use crate::stream::MessageStream;
@@ -61,6 +62,40 @@ impl Models {
             .models()
             .into_iter()
             .find(|m| m.id == model_id)
+    }
+
+    /// Refresh every provider's model overlay from models.dev and the vendor
+    /// list-models endpoints. Best-effort: never fails, records per-provider
+    /// outcomes in the report, and leaves existing overlays untouched on
+    /// failure.
+    pub async fn refresh(&self) -> RefreshReport {
+        self.refresh_from(discovery::MODELS_DEV_URL).await
+    }
+
+    /// [`refresh`](Self::refresh) against a specific models.dev catalog URL.
+    pub async fn refresh_from(&self, catalog_url: &str) -> RefreshReport {
+        // One models.dev fetch shared by every provider that wants it.
+        let catalog = match self.providers.iter().find(|p| p.models_dev_id().is_some()) {
+            Some(provider) => {
+                Some(discovery::fetch_models_dev(provider.http_client(), catalog_url).await)
+            }
+            None => None,
+        };
+        let entries = futures_util::future::join_all(self.providers.iter().map(|provider| {
+            let catalog = &catalog;
+            async move {
+                let outcome = match catalog {
+                    Some(Ok(data)) => provider.apply_models_dev(data),
+                    Some(Err(err)) if provider.models_dev_id().is_some() => {
+                        RefreshOutcome::Failed(err.clone())
+                    }
+                    _ => RefreshOutcome::Skipped,
+                };
+                provider.refresh_entry(outcome).await
+            }
+        }))
+        .await;
+        RefreshReport { entries }
     }
 
     /// Stream a completion, dispatching to the provider that owns `model`

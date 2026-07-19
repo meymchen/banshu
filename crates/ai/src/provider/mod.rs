@@ -2,11 +2,12 @@
 //! the wire protocol its models speak. Per-vendor constructors (DeepSeek, Z.AI,
 //! …) live in submodules and delegate to the generic constructors here.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::api::anthropic_messages::AnthropicMessages;
 use crate::api::openai_completions::OpenAiCompletions;
 use crate::api::{ApiRequest, ChatApi};
+use crate::discovery::{RefreshEntry, RefreshOutcome};
 use crate::http;
 use crate::options::StreamOptions;
 use crate::stream::MessageStream;
@@ -51,6 +52,17 @@ pub struct AnthropicCompat {
     pub send_session_affinity_headers: bool,
 }
 
+/// The in-process overlay of dynamically discovered models, layered over the
+/// bundled catalog by [`Provider::models`]. Refresh failures leave it
+/// untouched; it is lost when the process exits.
+#[derive(Default)]
+struct Overlay {
+    /// models.dev catalog-refresh entries (full metadata; override + append).
+    refreshed: Vec<Model>,
+    /// Probe-synthesized models (bare ids; append-only, zero-means-unknown).
+    probed: Vec<Model>,
+}
+
 /// A configured provider: metadata + auth + a wire-protocol handle.
 pub struct Provider {
     id: String,
@@ -62,6 +74,8 @@ pub struct Provider {
     http: reqwest::Client,
     openai_compat: OpenAiCompat,
     anthropic_compat: AnthropicCompat,
+    models_dev_id: Option<String>,
+    overlay: RwLock<Overlay>,
 }
 
 impl Provider {
@@ -85,6 +99,8 @@ impl Provider {
             http: http::build_client(),
             openai_compat: OpenAiCompat::default(),
             anthropic_compat: AnthropicCompat::default(),
+            models_dev_id: None,
+            overlay: RwLock::default(),
         }
     }
 
@@ -108,7 +124,17 @@ impl Provider {
             http: http::build_client(),
             openai_compat: OpenAiCompat::default(),
             anthropic_compat: AnthropicCompat::default(),
+            models_dev_id: None,
+            overlay: RwLock::default(),
         }
+    }
+
+    /// Set the models.dev provider key used by the catalog-refresh layer of
+    /// dynamic discovery. Vendor constructors set this; custom providers
+    /// without one skip the models.dev layer entirely.
+    pub fn with_models_dev_id(mut self, id: impl Into<String>) -> Self {
+        self.models_dev_id = Some(id.into());
+        self
     }
 
     /// Configure the endpoint quirks of this OpenAI-compatible provider.
@@ -139,6 +165,7 @@ impl Provider {
             ["OPENAI_API_KEY"],
         )
         .with_openai_prompt_caching(OpenAiPromptCaching::OpenAi)
+        .with_models_dev_id("openai")
     }
 
     /// DeepSeek — OpenAI-compatible, `DEEPSEEK_API_KEY`.
@@ -153,6 +180,7 @@ impl Provider {
             requires_reasoning_content_on_assistant_messages: true,
             ..OpenAiCompat::default()
         })
+        .with_models_dev_id("deepseek")
     }
 
     /// Z.AI (GLM coding plan) — OpenAI-compatible, `ZAI_API_KEY`.
@@ -163,6 +191,7 @@ impl Provider {
             "https://api.z.ai/api/coding/paas/v4",
             ["ZAI_API_KEY"],
         )
+        .with_models_dev_id("zai")
     }
 
     /// MiniMax — Anthropic-compatible, `MINIMAX_API_KEY`.
@@ -173,6 +202,7 @@ impl Provider {
             "https://api.minimax.io/anthropic",
             ["MINIMAX_API_KEY"],
         )
+        .with_models_dev_id("minimax")
     }
 
     /// Moonshot AI — OpenAI-compatible, `MOONSHOT_API_KEY`.
@@ -183,6 +213,7 @@ impl Provider {
             "https://api.moonshot.ai/v1",
             ["MOONSHOT_API_KEY"],
         )
+        .with_models_dev_id("moonshotai")
     }
 
     /// Kimi For Coding — Anthropic-compatible, `KIMI_API_KEY`.
@@ -193,6 +224,7 @@ impl Provider {
             "https://api.kimi.com/coding",
             ["KIMI_API_KEY"],
         )
+        .with_models_dev_id("kimi-for-coding")
     }
 
     /// Xiaomi MiMo — OpenAI-compatible, `XIAOMI_API_KEY`.
@@ -203,6 +235,7 @@ impl Provider {
             "https://api.xiaomimimo.com/v1",
             ["XIAOMI_API_KEY"],
         )
+        .with_models_dev_id("xiaomi")
     }
 
     /// The provider id.
@@ -225,10 +258,151 @@ impl Provider {
         self.api_kind
     }
 
-    /// The provider's models, loaded from the bundled catalog and stamped with
-    /// this provider's id, base URL, and wire protocol.
+    /// The provider's models: the bundled catalog layered under anything
+    /// dynamic discovery has found — models.dev entries override same-id
+    /// catalog entries and append new ones; probe-discovered models are
+    /// append-only.
     pub fn models(&self) -> Vec<Model> {
-        crate::models::catalog_models(&self.id, &self.base_url, self.api_kind)
+        let mut merged = crate::models::catalog_models(&self.id, &self.base_url, self.api_kind);
+        let overlay = self.overlay.read().expect("model overlay lock poisoned");
+        for model in &overlay.refreshed {
+            match merged.iter_mut().find(|m| m.id == model.id) {
+                Some(slot) => *slot = model.clone(),
+                None => merged.push(model.clone()),
+            }
+        }
+        for model in &overlay.probed {
+            if !merged.iter().any(|m| m.id == model.id) {
+                merged.push(model.clone());
+            }
+        }
+        merged
+    }
+
+    /// The models.dev provider key for the catalog-refresh layer, if any.
+    pub(crate) fn models_dev_id(&self) -> Option<&str> {
+        self.models_dev_id.as_deref()
+    }
+
+    /// Apply a fetched models.dev `api.json` to this provider's overlay.
+    pub(crate) fn apply_models_dev(&self, data: &serde_json::Value) -> RefreshOutcome {
+        let Some(key) = &self.models_dev_id else {
+            return RefreshOutcome::Skipped;
+        };
+        match crate::models::dev::models_from_api_json(
+            data,
+            key,
+            &self.id,
+            &self.base_url,
+            self.api_kind,
+        ) {
+            Some(models) => {
+                self.overlay
+                    .write()
+                    .expect("model overlay lock poisoned")
+                    .refreshed = models;
+                RefreshOutcome::Refreshed
+            }
+            None => RefreshOutcome::Failed(format!("models.dev has no models for `{key}`")),
+        }
+    }
+
+    /// Probe this provider's list-models endpoint, replacing the probed layer
+    /// of the overlay with zero-means-unknown models for the returned ids.
+    /// Skipped without an API key; 404/405/501 means the endpoint doesn't
+    /// exist. Only ids no catalog layer knows ever surface from this layer.
+    pub(crate) async fn probe_models(&self) -> RefreshOutcome {
+        let Some(api_key) = self.env_api_key() else {
+            return RefreshOutcome::Skipped;
+        };
+        let base = self.base_url.trim_end_matches('/');
+        let request = match self.api_kind {
+            ApiKind::OpenAiCompletions => {
+                self.http.get(format!("{base}/models")).bearer_auth(api_key)
+            }
+            ApiKind::AnthropicMessages => self
+                .http
+                .get(format!("{base}/v1/models"))
+                .header("x-api-key", api_key)
+                .header(
+                    "anthropic-version",
+                    crate::api::anthropic_messages::ANTHROPIC_VERSION,
+                ),
+        };
+        let response = match request.timeout(crate::discovery::DISCOVERY_TIMEOUT).send().await {
+            Ok(response) => response,
+            Err(err) => return RefreshOutcome::Failed(err.to_string()),
+        };
+        let status = response.status();
+        if matches!(status.as_u16(), 404 | 405 | 501) {
+            return RefreshOutcome::EndpointUnsupported;
+        }
+        if !status.is_success() {
+            return RefreshOutcome::Failed(format!("list-models returned HTTP {status}"));
+        }
+        let listed: crate::discovery::ListModelsResponse = match response.json().await {
+            Ok(listed) => listed,
+            Err(err) => return RefreshOutcome::Failed(err.to_string()),
+        };
+        let probed = listed
+            .data
+            .into_iter()
+            .map(|entry| Model {
+                name: entry.display_name.unwrap_or_else(|| entry.id.clone()),
+                id: entry.id,
+                api: self.api_kind,
+                provider: self.id.clone(),
+                base_url: self.base_url.clone(),
+                reasoning: false,
+                input: vec![crate::types::Modality::Text],
+                cost: crate::types::ModelCost::default(),
+                context_window: 0,
+                max_tokens: 0,
+            })
+            .collect();
+        self.overlay
+            .write()
+            .expect("model overlay lock poisoned")
+            .probed = probed;
+        RefreshOutcome::Refreshed
+    }
+
+    /// Refresh this provider's dynamic models without a registry: fetch
+    /// models.dev when a models.dev id is configured, then probe the vendor
+    /// list-models endpoint. Best-effort — failures are recorded in the
+    /// returned entry and never disturb previously discovered models.
+    pub async fn refresh_models(&self) -> RefreshEntry {
+        self.refresh_models_from(crate::discovery::MODELS_DEV_URL)
+            .await
+    }
+
+    /// [`refresh_models`](Self::refresh_models) against a specific models.dev
+    /// catalog URL.
+    pub async fn refresh_models_from(&self, catalog_url: &str) -> RefreshEntry {
+        let catalog = if self.models_dev_id.is_some() {
+            match crate::discovery::fetch_models_dev(&self.http, catalog_url).await {
+                Ok(data) => self.apply_models_dev(&data),
+                Err(err) => RefreshOutcome::Failed(err),
+            }
+        } else {
+            RefreshOutcome::Skipped
+        };
+        self.refresh_entry(catalog).await
+    }
+
+    /// Assemble this provider's report entry from an already-decided catalog
+    /// outcome, running the probe layer.
+    pub(crate) async fn refresh_entry(&self, catalog: RefreshOutcome) -> RefreshEntry {
+        RefreshEntry {
+            provider: self.id.clone(),
+            catalog,
+            probe: self.probe_models().await,
+        }
+    }
+
+    /// The provider's HTTP client, shared with discovery fetches.
+    pub(crate) fn http_client(&self) -> &reqwest::Client {
+        &self.http
     }
 
     /// Whether a key is resolvable from configured environment variables.
