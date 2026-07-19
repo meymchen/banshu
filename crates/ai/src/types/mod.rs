@@ -15,7 +15,10 @@ pub use content::{
     AssistantContent, ImageContent, TextContent, ThinkingContent, ToolCall, UserContent,
 };
 pub use context::Context;
-pub use message::{AssistantMessage, Message, StopReason, ToolResultMessage, UserMessage};
+pub use message::{
+    AssistantMessage, Diagnostic, DiagnosticCode, Message, StopReason, ToolResultMessage,
+    UserMessage,
+};
 pub use model::{ApiKind, Modality, Model, ModelCost};
 pub use tool::Tool;
 pub use usage::{Cost, Usage};
