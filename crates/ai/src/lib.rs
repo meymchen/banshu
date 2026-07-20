@@ -24,6 +24,7 @@ mod http;
 mod models;
 mod options;
 mod registry;
+mod sse;
 mod stream;
 mod types;
 
