@@ -10,7 +10,10 @@ pub mod openai_completions;
 use crate::options::StreamOptions;
 use crate::provider::{AnthropicCompat, OpenAiCompat};
 use crate::stream::{AssistantMessageEvent, MessageStream};
-use crate::types::{AssistantMessage, Context, Cost, Model, ModelCost, StopReason, Usage};
+use crate::types::{
+    AssistantMessage, Context, Cost, Diagnostic, DiagnosticCode, Model, ModelCost, StopReason,
+    Usage,
+};
 
 /// A fully-resolved request handed to a [`ChatApi`] implementation.
 ///
@@ -49,6 +52,19 @@ pub(crate) fn fail(
     }
 }
 
+/// [`fail`], plus attaching a diagnostic first — e.g. the raw (capped,
+/// redacted) body behind a clean `detail` summary, or an in-stream protocol
+/// violation's offending payload.
+pub(crate) fn fail_with_diagnostic(
+    message: &mut AssistantMessage,
+    kind: crate::ErrorKind,
+    detail: &str,
+    diagnostic: Diagnostic,
+) -> AssistantMessageEvent {
+    message.diagnostics.push(diagnostic);
+    fail(message, kind, detail)
+}
+
 /// Compute cost from token counts and per-million rates.
 pub(crate) fn compute_cost(usage: &Usage, rates: &ModelCost) -> Cost {
     let per = |tokens: u64, rate: f64| tokens as f64 / 1_000_000.0 * rate;
@@ -77,6 +93,21 @@ pub(crate) fn parse_arguments(raw: &str) -> serde_json::Value {
         return serde_json::json!({});
     }
     serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+/// Parse one SSE event's `data:` payload as JSON, or build the terminal
+/// malformed-data detail/diagnostic a caller should `yield` via
+/// [`fail_with_diagnostic`] before returning. Shared by both protocols —
+/// each still checks for its own non-JSON sentinel (OpenAI's `[DONE]`) or
+/// named `event:` field (Anthropic's `error`) before calling this, since
+/// those are protocol-specific and don't belong in a shared parse step.
+pub(crate) fn parse_sse_json(data: String) -> Result<serde_json::Value, (String, Diagnostic)> {
+    serde_json::from_str(&data).map_err(|_| {
+        (
+            "malformed SSE data: not valid JSON".to_string(),
+            Diagnostic::new(DiagnosticCode::ProtocolViolation, data),
+        )
+    })
 }
 
 /// A wire protocol that can stream a chat completion.

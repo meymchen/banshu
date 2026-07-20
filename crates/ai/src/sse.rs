@@ -1,15 +1,9 @@
 //! A pure, incremental Server-Sent Events decoder.
 //!
 //! No HTTP dependency: bytes go in via [`SseDecoder::push`] as they arrive off
-//! the wire, [`SseEvent`]s come out. This is a prefactor for the shared
-//! `RequestExecutor` (call-site migration off [`crate::http::sse_data_lines`]
-//! happens there) — kept standalone so it's testable without spinning up a
-//! server.
-//!
-//! Nothing outside this module calls it yet — the RequestExecutor ticket
-//! wires it up to `http::sse_data_lines`'s call sites — so everything below
-//! is allowed to look unused until then.
-#![allow(dead_code)]
+//! the wire, [`SseEvent`]s come out. [`crate::executor`] is the sole caller,
+//! feeding it bytes from a live response body — kept standalone here so it's
+//! testable without spinning up a server.
 
 /// One decoded SSE event: the `event:` field (if any) and the `data:` payload,
 /// with multiple `data:` lines already joined by `\n`.

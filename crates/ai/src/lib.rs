@@ -20,6 +20,7 @@ pub mod provider;
 
 mod discovery;
 mod error;
+mod executor;
 mod http;
 mod models;
 mod options;

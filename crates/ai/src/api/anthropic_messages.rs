@@ -9,8 +9,9 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{ApiRequest, ChatApi, compute_cost, fail, parse_arguments};
+use super::{ApiRequest, ChatApi, compute_cost, fail, fail_with_diagnostic, parse_arguments};
 use crate::CacheRetention;
+use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::provider::AnthropicCompat;
 use crate::stream::{AssistantMessageEvent, MessageStream};
@@ -48,6 +49,7 @@ impl ChatApi for AnthropicMessages {
             .options
             .max_retries
             .unwrap_or(http::DEFAULT_MAX_RETRIES);
+        let max_retry_delay = request.options.max_retry_delay;
         // Session affinity routes prompt-cache hits to the same replica; it
         // serves nothing when caching is disabled.
         let caching = request
@@ -68,67 +70,65 @@ impl ChatApi for AnthropicMessages {
                 return;
             };
 
-            let mut builder = http_client
-                .post(&url)
-                .header("x-api-key", api_key)
-                .header("anthropic-version", ANTHROPIC_VERSION)
-                .json(&body);
-            if let Some(session_id) = session_affinity {
-                builder = builder.header("x-session-affinity", session_id);
-            }
-            if let Some(timeout) = timeout {
-                builder = builder.timeout(timeout);
-            }
-
-            // Bounded pre-stream retry: once SSE decoding starts below, no
-            // attempt is ever re-sent.
-            let mut attempt: u32 = 0;
-            let response = loop {
-                let this_attempt = builder
-                    .try_clone()
-                    .expect("JSON request bodies are cloneable");
-                match http::send_once(this_attempt).await {
-                    Ok(response) => break response,
-                    Err(failure) if failure.kind.is_retryable() && attempt < max_retries => {
-                        attempt += 1;
-                        let delay = http::retry_delay(attempt, failure.retry_after);
-                        yield AssistantMessageEvent::Retry {
-                            attempt,
-                            max_attempts: max_retries + 1,
-                            delay,
-                            kind: failure.kind,
-                            partial: message.clone(),
-                        };
-                        tokio::time::sleep(delay).await;
-                    }
-                    Err(failure) => {
-                        yield fail(&mut message, failure.kind, &failure.detail);
-                        return;
-                    }
+            let factory = move || {
+                let mut builder = http_client
+                    .post(&url)
+                    .header("x-api-key", &api_key)
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .json(&body);
+                if let Some(session_id) = &session_affinity {
+                    builder = builder.header("x-session-affinity", session_id);
                 }
+                if let Some(timeout) = timeout {
+                    builder = builder.timeout(timeout);
+                }
+                builder
             };
 
             let mut blocks: Vec<BlockAccum> = Vec::new();
             let mut usage = Usage::default();
             let mut stop_reason = StopReason::Stop;
-            let events = http::sse_data_lines(response);
-            let mut events = std::pin::pin!(events);
 
-            'outer: while let Some(data) = events.next().await {
-                let data = match data {
-                    Ok(data) => data,
-                    Err(err) => {
-                        yield fail(
-                            &mut message,
-                            crate::ErrorKind::StreamInterrupted,
-                            &format!("stream error: {err}"),
-                        );
+            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay));
+            'outer: while let Some(exec_event) = exec.next().await {
+                let data = match exec_event {
+                    ExecutorEvent::Retry { attempt, max_attempts, delay, kind } => {
+                        yield AssistantMessageEvent::Retry {
+                            attempt,
+                            max_attempts,
+                            delay,
+                            kind,
+                            partial: message.clone(),
+                        };
+                        continue;
+                    }
+                    ExecutorEvent::Established { request_id } => {
+                        message.response_id = request_id;
+                        continue;
+                    }
+                    ExecutorEvent::Eof => break 'outer,
+                    ExecutorEvent::Failed { kind, message: detail, diagnostics } => {
+                        message.diagnostics.extend(diagnostics);
+                        yield fail(&mut message, kind, &detail);
+                        return;
+                    }
+                    ExecutorEvent::Event(sse_event) => sse_event,
+                };
+                let value = match super::parse_sse_json(data.data) {
+                    Ok(value) => value,
+                    Err((detail, diagnostic)) => {
+                        yield fail_with_diagnostic(&mut message, crate::ErrorKind::Protocol, &detail, diagnostic);
                         return;
                     }
                 };
-                let Ok(value) = serde_json::from_str::<Value>(&data) else {
-                    continue;
-                };
+                if data.event.as_deref() == Some("error")
+                    || value.get("type").and_then(Value::as_str) == Some("error")
+                {
+                    let detail = http::json_error_summary(&value)
+                        .unwrap_or_else(|| "provider returned an error".to_string());
+                    yield fail(&mut message, crate::ErrorKind::Api, &detail);
+                    return;
+                }
                 match value.get("type").and_then(Value::as_str) {
                     Some("message_start") => {
                         let wire = &value["message"]["usage"];
