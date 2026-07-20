@@ -1,7 +1,8 @@
 //! Token usage and computed cost for a completion.
 
 /// Computed cost in USD, broken out by token class.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Cost {
     /// Cost of input (prompt) tokens.
     pub input: f64,
@@ -16,7 +17,8 @@ pub struct Cost {
 }
 
 /// Token counts reported by the provider plus derived [`Cost`].
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Usage {
     /// Uncached input (prompt) tokens, billed at the normal input rate.
     pub input: u64,
@@ -29,8 +31,14 @@ pub struct Usage {
     /// Tokens written with the 1h cache TTL (a subset of `cache_write`), when
     /// the provider reports them. Anthropic bills these at twice the input
     /// rate instead of the short-TTL cache-write rate.
+    #[serde(
+        rename = "cacheWrite1h",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cache_write_1h: Option<u64>,
     /// Reasoning tokens, when the provider reports them (a subset of `output`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<u64>,
     /// Total tokens across input and output.
     pub total_tokens: u64,
