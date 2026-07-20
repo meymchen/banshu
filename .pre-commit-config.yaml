@@ -1,0 +1,17 @@
+# Local hooks mirroring the CI "lint" job (`.github/workflows/ci.yml`).
+# Install the git hook with `prek install`, or run manually with `prek run --all-files`.
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --all --check
+        entry: cargo fmt --all --check
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-features --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
