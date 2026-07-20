@@ -2,16 +2,23 @@
 
 /// Which wire protocol a model speaks. Used for identification and to pick the
 /// matching [`ChatApi`](crate::api::ChatApi) implementation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serializes to pi-ai's stable api id strings.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ApiKind {
     /// OpenAI-style `POST /chat/completions`.
+    #[serde(rename = "openai-completions")]
     OpenAiCompletions,
     /// Anthropic-style `POST /v1/messages`.
+    #[serde(rename = "anthropic-messages")]
     AnthropicMessages,
 }
 
 /// An input modality a model accepts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Modality {
     /// Text input.
     Text,

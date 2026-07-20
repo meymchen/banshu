@@ -45,3 +45,9 @@ and stream dispatch by model id.
 **In-band error**:
 A failure delivered as a stream event carrying partial content, not a
 `Result::Err`. Only setup/config errors are `Result`s.
+
+**Context Snapshot** (`ContextSnapshotV1`):
+The versioned JSON persistence format for a `Context`, pinned by a golden
+fixture. The serialized shape (camelCase, `role`/`type` tags) is a published
+contract compatible with pi-ai; a snapshot declaring an unknown version is
+rejected outright, never parsed best-effort.

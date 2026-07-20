@@ -196,7 +196,9 @@ fn redact_long_base64_runs(message: &str) -> String {
 }
 
 /// Why a completion stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum StopReason {
     /// Natural end of turn.
     Stop,
@@ -211,9 +213,11 @@ pub enum StopReason {
 }
 
 /// A user turn.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct UserMessage {
-    /// Ordered content blocks.
+    /// Ordered content blocks. Always serialized as blocks; deserialization
+    /// also accepts pi-ai's plain-string form (`"content": "hi"`).
+    #[serde(deserialize_with = "user_content_blocks")]
     pub content: Vec<UserContent>,
     /// Unix timestamp in milliseconds.
     pub timestamp: i64,
@@ -244,8 +248,32 @@ impl UserMessage {
     }
 }
 
+/// Accept pi-ai's `string | blocks[]` user content, normalizing to blocks.
+fn user_content_blocks<'de, D>(deserializer: D) -> Result<Vec<UserContent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Text(String),
+        Blocks(Vec<UserContent>),
+    }
+
+    Ok(match Repr::deserialize(deserializer)? {
+        Repr::Text(text) => vec![UserContent::Text(TextContent {
+            text,
+            signature: None,
+        })],
+        Repr::Blocks(blocks) => blocks,
+    })
+}
+
 /// An assembled assistant turn — the terminal value of a [`MessageStream`](crate::MessageStream).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssistantMessage {
     /// Ordered content blocks (text / thinking / tool calls).
     pub content: Vec<AssistantContent>,
@@ -256,18 +284,24 @@ pub struct AssistantMessage {
     /// The requested model id.
     pub model: String,
     /// Concrete routed model id when it differs from `model` (e.g. router "auto").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_model: Option<String>,
     /// Provider-specific response or message identifier, when exposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_id: Option<String>,
-    /// Safe provider/runtime diagnostics.
+    /// Safe provider/runtime diagnostics. Extension field beyond the pi-ai shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
     /// Token usage and cost.
     pub usage: Usage,
     /// Why the completion stopped.
     pub stop_reason: StopReason,
     /// Human-readable error, set when `stop_reason` is `Error`/`Aborted`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
     /// Structured classification of the failure, set alongside `error_message`.
+    /// Extension field beyond the pi-ai shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<ErrorKind>,
     /// Unix timestamp in milliseconds.
     pub timestamp: i64,
@@ -325,7 +359,8 @@ impl AssistantMessage {
 }
 
 /// The result of a tool call, fed back for the next turn.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolResultMessage {
     /// The id of the tool call this answers (echoes `ToolCall.id`).
     pub tool_call_id: String,
@@ -404,8 +439,11 @@ impl ToolResultMessage {
     }
 }
 
-/// Any message in a conversation.
-#[derive(Debug, Clone)]
+/// Any message in a conversation, tagged by `role` in JSON
+/// (`user` / `assistant` / `toolResult`).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "role", rename_all = "camelCase")]
 pub enum Message {
     /// A user turn.
     User(UserMessage),

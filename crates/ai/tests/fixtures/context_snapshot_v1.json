@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "context": {
+    "systemPrompt": "You are terse.",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          { "type": "text", "text": "What's the weather in 東京?" },
+          { "type": "image", "data": "aGVsbG8=", "mimeType": "image/png" }
+        ],
+        "timestamp": 1752900000000
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants weather.",
+            "thinkingSignature": "sig-thinking-1"
+          },
+          {
+            "type": "text",
+            "text": "Let me check.",
+            "textSignature": "sig-text-1"
+          },
+          {
+            "type": "toolCall",
+            "id": "call_1",
+            "name": "get_weather",
+            "arguments": { "city": "Tokyo" },
+            "rawArguments": "{\"city\":\"Tokyo\"}"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "responseModel": "deepseek-chat-v3",
+        "responseId": "resp_123",
+        "diagnostics": [
+          { "code": "providerError", "message": "upstream hiccup, recovered" }
+        ],
+        "usage": {
+          "input": 120,
+          "output": 45,
+          "cacheRead": 30,
+          "cacheWrite": 8,
+          "cacheWrite1h": 2,
+          "reasoning": 12,
+          "totalTokens": 203,
+          "cost": {
+            "input": 0.1,
+            "output": 0.2,
+            "cacheRead": 0.01,
+            "cacheWrite": 0.02,
+            "total": 0.33
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 1752900001000
+      },
+      {
+        "role": "toolResult",
+        "toolCallId": "call_1",
+        "toolName": "get_weather",
+        "content": [
+          { "type": "text", "text": "22°C, sunny" },
+          { "type": "image", "data": "c3Vubnk=", "mimeType": "image/jpeg" }
+        ],
+        "isError": false,
+        "timestamp": 1752900002000
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "thinkingSignature": "opaque-redacted-blob",
+            "redacted": true
+          },
+          { "type": "text", "text": "Partial answer" }
+        ],
+        "api": "anthropic-messages",
+        "provider": "minimax",
+        "model": "MiniMax-M1",
+        "usage": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 0,
+          "cost": {
+            "input": 0.0,
+            "output": 0.0,
+            "cacheRead": 0.0,
+            "cacheWrite": 0.0,
+            "total": 0.0
+          }
+        },
+        "stopReason": "error",
+        "errorMessage": "provider closed the stream mid-response",
+        "errorKind": "streamInterrupted",
+        "timestamp": 1752900003000
+      }
+    ],
+    "tools": [
+      {
+        "name": "get_weather",
+        "description": "Look up current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": { "city": { "type": "string" } },
+          "required": ["city"]
+        }
+      }
+    ]
+  }
+}

@@ -29,6 +29,13 @@ pub enum Error {
     /// A JSON (de)serialization error.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// A persisted context snapshot carries a version this crate cannot read.
+    #[error("unsupported context snapshot version {found} (expected 1)")]
+    UnsupportedSnapshotVersion {
+        /// The version the snapshot declared.
+        found: u32,
+    },
 }
 
 /// Convenience alias for results carrying a [`banshu-ai`](crate) [`Error`].
@@ -41,7 +48,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// whether a pre-stream failure is worth re-sending. Downstream callers (e.g.
 /// an agent layer deciding whether to re-run a whole turn) should branch on
 /// this instead of pattern-matching the message string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ErrorKind {
     /// 401, or 403 that doesn't look like a quota limit. Not retryable.
     Auth,

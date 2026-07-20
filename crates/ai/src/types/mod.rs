@@ -14,7 +14,7 @@ mod usage;
 pub use content::{
     AssistantContent, ImageContent, TextContent, ThinkingContent, ToolCall, UserContent,
 };
-pub use context::Context;
+pub use context::{Context, ContextSnapshotV1};
 pub use message::{
     AssistantMessage, Diagnostic, DiagnosticCode, Message, StopReason, ToolResultMessage,
     UserMessage,
