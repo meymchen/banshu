@@ -5,7 +5,8 @@
 /// `parameters` is an opaque JSON Schema value — banshu does not dictate how
 /// callers author schemas. A `schemars` convenience constructor may be offered
 /// later behind the `schemars` feature.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Tool {
     /// The tool name the model uses to invoke it.
     pub name: String,
