@@ -155,12 +155,11 @@ fn round_trips_every_message_and_content_variant() {
 
 #[test]
 fn round_trips_an_error_tool_result() {
-    let context =
-        Context::new().with_message(Message::ToolResult(ToolResultMessage::error_text(
-            "call_9",
-            "get_weather",
-            "city not found",
-        )));
+    let context = Context::new().with_message(Message::ToolResult(ToolResultMessage::error_text(
+        "call_9",
+        "get_weather",
+        "city not found",
+    )));
     let json = serde_json::to_string(&ContextSnapshotV1::new(context.clone())).expect("serialize");
     let restored: ContextSnapshotV1 = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(restored.context, context);
