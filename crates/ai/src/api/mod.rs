@@ -12,11 +12,8 @@ mod protocol_event;
 
 use crate::options::StreamOptions;
 use crate::provider::{AnthropicCompat, OpenAiCompat};
-use crate::stream::{AssistantMessageEvent, MessageStream};
-use crate::types::{
-    AssistantMessage, Context, Cost, Diagnostic, DiagnosticCode, Model, ModelCost, StopReason,
-    Usage,
-};
+use crate::stream::MessageStream;
+use crate::types::{Context, Cost, Diagnostic, DiagnosticCode, Model, ModelCost, Usage};
 
 /// A fully-resolved request handed to a [`ChatApi`] implementation.
 ///
@@ -37,35 +34,6 @@ pub struct ApiRequest<'a> {
     pub openai_compat: OpenAiCompat,
     /// Endpoint quirks declared by an Anthropic-compatible provider.
     pub anthropic_compat: AnthropicCompat,
-}
-
-/// Mark `message` as failed and produce the terminal in-band `Error` event.
-/// Shared by every protocol implementation.
-pub(crate) fn fail(
-    message: &mut AssistantMessage,
-    kind: crate::ErrorKind,
-    detail: &str,
-) -> AssistantMessageEvent {
-    message.stop_reason = StopReason::Error;
-    message.error_message = Some(detail.to_string());
-    message.error_kind = Some(kind);
-    AssistantMessageEvent::Error {
-        reason: StopReason::Error,
-        error: message.clone(),
-    }
-}
-
-/// [`fail`], plus attaching a diagnostic first — e.g. the raw (capped,
-/// redacted) body behind a clean `detail` summary, or an in-stream protocol
-/// violation's offending payload.
-pub(crate) fn fail_with_diagnostic(
-    message: &mut AssistantMessage,
-    kind: crate::ErrorKind,
-    detail: &str,
-    diagnostic: Diagnostic,
-) -> AssistantMessageEvent {
-    message.diagnostics.push(diagnostic);
-    fail(message, kind, detail)
 }
 
 /// Compute cost from token counts and per-million rates.
@@ -100,7 +68,7 @@ pub(crate) fn parse_arguments(raw: &str) -> serde_json::Value {
 
 /// Parse one SSE event's `data:` payload as JSON, or build the terminal
 /// malformed-data detail/diagnostic a caller should `yield` via
-/// [`fail_with_diagnostic`] before returning. Shared by both protocols —
+/// `MessageAssembler::fail` before returning. Shared by both protocols —
 /// each still checks for its own non-JSON sentinel (OpenAI's `[DONE]`) or
 /// named `event:` field (Anthropic's `error`) before calling this, since
 /// those are protocol-specific and don't belong in a shared parse step.
