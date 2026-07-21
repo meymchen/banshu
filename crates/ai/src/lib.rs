@@ -20,10 +20,12 @@ pub mod provider;
 
 mod discovery;
 mod error;
+mod executor;
 mod http;
 mod models;
 mod options;
 mod registry;
+mod sse;
 mod stream;
 mod types;
 

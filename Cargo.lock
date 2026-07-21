@@ -59,6 +59,7 @@ dependencies = [
  "futures",
  "futures-core",
  "futures-util",
+ "httpdate",
  "reqwest",
  "schemars",
  "serde",
