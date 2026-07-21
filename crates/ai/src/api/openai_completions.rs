@@ -8,7 +8,9 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::{ApiRequest, ChatApi, compute_cost, fail, fail_with_diagnostic, parse_arguments};
+use super::assembler::{MessageAssembler, is_terminal};
+use super::protocol_event::ProtocolEvent;
+use super::{ApiRequest, ChatApi, compute_cost};
 use crate::CacheRetention;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
@@ -16,7 +18,7 @@ use crate::provider::{OpenAiCompat, OpenAiPromptCaching};
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
     AssistantContent, AssistantMessage, Context, Diagnostic, DiagnosticCode, Message, Model,
-    StopReason, TextContent, ThinkingContent, ToolCall, Usage,
+    StopReason, ThinkingContent, Usage,
 };
 
 /// The OpenAI-completions wire protocol.
@@ -58,11 +60,11 @@ impl ChatApi for OpenAiCompletions {
         let prompt_caching = request.openai_compat.prompt_caching;
 
         let stream = async_stream::stream! {
-            let mut message = AssistantMessage::streaming(&model_id, &provider, API_NAME);
-            yield AssistantMessageEvent::Start { partial: message.clone() };
+            let mut assembler = MessageAssembler::new(AssistantMessage::streaming(&model_id, &provider, API_NAME));
+            yield AssistantMessageEvent::Start { partial: assembler.partial().clone() };
 
             let Some(api_key) = api_key else {
-                yield fail(&mut message, crate::ErrorKind::Api, "no API key configured");
+                yield assembler.fail(crate::ErrorKind::Api, "no API key configured", Vec::new());
                 return;
             };
 
@@ -84,62 +86,63 @@ impl ChatApi for OpenAiCompletions {
                 builder
             };
 
-            let mut thinking = String::new();
-            let mut thinking_source: Option<String> = None;
-            let mut text = String::new();
+            let mut next_block_id: u64 = 0;
+            let mut thinking_block_id: Option<u64> = None;
+            let mut text_block_id: Option<u64> = None;
             let mut tools: Vec<ToolAccum> = Vec::new();
             let mut usage = Usage::default();
             let mut stop_reason = StopReason::Stop;
+            // The OpenAI wire terminator is `data: [DONE]`, but some
+            // compatible servers close the connection right after the
+            // finish_reason-bearing chunk without sending it; either counts
+            // as having formally terminated. A bare EOF with neither is a
+            // dropped connection, not a completed response.
+            let mut terminated_formally = false;
 
             let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay));
             'outer: while let Some(exec_event) = exec.next().await {
                 let data = match exec_event {
                     ExecutorEvent::Retry { attempt, max_attempts, delay, kind } => {
-                        yield AssistantMessageEvent::Retry {
-                            attempt,
-                            max_attempts,
-                            delay,
-                            kind,
-                            partial: message.clone(),
-                        };
+                        if let Some(event) = assembler.apply(ProtocolEvent::Retry { attempt, max_attempts, delay, kind }) {
+                            yield event;
+                        }
                         continue;
                     }
                     ExecutorEvent::Established { request_id } => {
-                        message.response_id = request_id;
+                        let _ = assembler.apply(ProtocolEvent::ResponseMetadata { response_id: request_id, response_model: None });
                         continue;
                     }
                     ExecutorEvent::Eof => break 'outer,
                     ExecutorEvent::Failed { kind, message: detail, diagnostics } => {
-                        message.diagnostics.extend(diagnostics);
-                        yield fail(&mut message, kind, &detail);
+                        yield assembler.fail(kind, detail, diagnostics);
                         return;
                     }
                     ExecutorEvent::Event(sse_event) => sse_event.data,
                 };
                 if data == "[DONE]" {
+                    terminated_formally = true;
                     break 'outer;
                 }
                 let value = match super::parse_sse_json(data) {
                     Ok(value) => value,
                     Err((detail, diagnostic)) => {
-                        yield fail_with_diagnostic(&mut message, crate::ErrorKind::Protocol, &detail, diagnostic);
+                        yield assembler.fail(crate::ErrorKind::Protocol, detail, vec![diagnostic]);
                         return;
                     }
                 };
                 if value.get("error").is_some() {
                     let detail = http::json_error_summary(&value)
                         .unwrap_or_else(|| "provider returned an error".to_string());
-                    yield fail(&mut message, crate::ErrorKind::Api, &detail);
+                    yield assembler.fail(crate::ErrorKind::Api, detail, Vec::new());
                     return;
                 }
                 let parsed = match serde_json::from_value::<ChatChunk>(value.clone()) {
                     Ok(parsed) => parsed,
                     Err(_) => {
-                        yield fail_with_diagnostic(
-                            &mut message,
+                        yield assembler.fail(
                             crate::ErrorKind::Protocol,
                             "unrecognized SSE chunk shape",
-                            Diagnostic::new(DiagnosticCode::ProtocolViolation, value.to_string()),
+                            vec![Diagnostic::new(DiagnosticCode::ProtocolViolation, value.to_string())],
                         );
                         return;
                     }
@@ -166,27 +169,52 @@ impl ChatApi for OpenAiCompletions {
                         Some((field, value.to_string()))
                     });
                     if let Some((field, reasoning)) = reasoning_delta {
-                        thinking_source.get_or_insert_with(|| field.to_string());
-                        thinking.push_str(&reasoning);
-                        message.content =
-                            partial_content(&thinking, thinking_source.as_deref(), &text);
-                        yield AssistantMessageEvent::ThinkingDelta {
-                            content_index: 0,
-                            delta: reasoning,
-                            partial: message.clone(),
+                        let block_id = match thinking_block_id {
+                            Some(id) => id,
+                            None => {
+                                let id = next_block_id;
+                                next_block_id += 1;
+                                thinking_block_id = Some(id);
+                                if let Some(event) = assembler.apply(ProtocolEvent::ThinkingStart {
+                                    block_id: id,
+                                    signature: Some(field.to_string()),
+                                    redacted: false,
+                                }) {
+                                    let terminal = is_terminal(&event);
+                                    yield event;
+                                    if terminal { return; }
+                                }
+                                id
+                            }
                         };
+                        if let Some(event) = assembler.apply(ProtocolEvent::ThinkingDelta { block_id, delta: reasoning }) {
+                            let terminal = is_terminal(&event);
+                            yield event;
+                            if terminal { return; }
+                        }
                     }
                     if let Some(delta) = choice.delta.content
                         && !delta.is_empty()
                     {
-                        text.push_str(&delta);
-                        message.content =
-                            partial_content(&thinking, thinking_source.as_deref(), &text);
-                        yield AssistantMessageEvent::TextDelta {
-                            content_index: 0,
-                            delta,
-                            partial: message.clone(),
+                        let block_id = match text_block_id {
+                            Some(id) => id,
+                            None => {
+                                let id = next_block_id;
+                                next_block_id += 1;
+                                text_block_id = Some(id);
+                                if let Some(event) = assembler.apply(ProtocolEvent::TextStart { block_id: id, signature: None }) {
+                                    let terminal = is_terminal(&event);
+                                    yield event;
+                                    if terminal { return; }
+                                }
+                                id
+                            }
                         };
+                        if let Some(event) = assembler.apply(ProtocolEvent::TextDelta { block_id, delta }) {
+                            let terminal = is_terminal(&event);
+                            yield event;
+                            if terminal { return; }
+                        }
                     }
                     for delta in choice.delta.tool_calls {
                         let slot = delta.index;
@@ -208,67 +236,70 @@ impl ChatApi for OpenAiCompletions {
                     }
                     if let Some(reason) = choice.finish_reason {
                         stop_reason = map_stop_reason(&reason);
+                        terminated_formally = true;
                     }
                 }
             }
 
-            usage.cost = compute_cost(&usage, &cost);
-            message.usage = usage;
-            message.stop_reason = stop_reason;
+            if !terminated_formally {
+                yield assembler.fail(
+                    crate::ErrorKind::StreamInterrupted,
+                    "connection closed before a completion signal ([DONE] or finish_reason)",
+                    Vec::new(),
+                );
+                return;
+            }
 
-            let mut content = partial_content(&thinking, thinking_source.as_deref(), &text);
+            // Closing an already-started block only ever fails as a protocol
+            // violation (an unknown/already-ended/mismatched block), which is
+            // always terminal — unlike the Start/Delta sites above, there's no
+            // non-terminal `Some` to distinguish here.
+            if let Some(block_id) = thinking_block_id
+                && let Some(event) = assembler.apply(ProtocolEvent::ThinkingEnd { block_id })
+            {
+                yield event;
+                return;
+            }
+            if let Some(block_id) = text_block_id
+                && let Some(event) = assembler.apply(ProtocolEvent::TextEnd { block_id })
+            {
+                yield event;
+                return;
+            }
+
+            // v0.3 collapses a tool call's fragments into one Start+Delta+End
+            // each, emitted at completion rather than per wire delta.
             for accum in tools {
                 if accum.is_empty() {
                     continue;
                 }
-                let tool_call = ToolCall {
-                    id: accum.id,
-                    name: accum.name,
-                    arguments: parse_arguments(&accum.arguments),
-                    raw_arguments: Some(accum.arguments),
-                };
-                let content_index = content.len();
-                content.push(AssistantContent::ToolCall(tool_call.clone()));
-                message.content = content.clone();
-                yield AssistantMessageEvent::ToolCallEnd {
-                    content_index,
-                    tool_call,
-                    partial: message.clone(),
-                };
+                let block_id = next_block_id;
+                next_block_id += 1;
+                if let Some(event) = assembler.apply(ProtocolEvent::ToolCallStart { block_id, id: accum.id, name: accum.name }) {
+                    yield event;
+                    return;
+                }
+                if let Some(event) = assembler.apply(ProtocolEvent::ToolCallDelta { block_id, delta: accum.arguments }) {
+                    yield event;
+                    return;
+                }
+                if let Some(event) = assembler.apply(ProtocolEvent::ToolCallEnd { block_id }) {
+                    let terminal = is_terminal(&event);
+                    yield event;
+                    if terminal { return; }
+                }
             }
 
-            message.content = content;
+            usage.cost = compute_cost(&usage, &cost);
+            let _ = assembler.apply(ProtocolEvent::Usage(usage));
+            let _ = assembler.apply(ProtocolEvent::Stop(stop_reason));
+
+            let message = assembler.into_message();
             yield AssistantMessageEvent::Done { reason: stop_reason, message };
         };
 
         MessageStream::new(stream)
     }
-}
-
-/// Build ordered content from accumulated thinking and text: thinking first
-/// (it streams before the answer), then text. Empty sections are omitted.
-/// The thinking block's signature records the wire field the reasoning
-/// arrived in, so replay can write it back under the same field.
-fn partial_content(
-    thinking: &str,
-    thinking_source: Option<&str>,
-    text: &str,
-) -> Vec<AssistantContent> {
-    let mut content = Vec::new();
-    if !thinking.is_empty() {
-        content.push(AssistantContent::Thinking(ThinkingContent {
-            thinking: thinking.to_string(),
-            signature: thinking_source.map(str::to_string),
-            redacted: false,
-        }));
-    }
-    if !text.is_empty() {
-        content.push(AssistantContent::Text(TextContent {
-            text: text.to_string(),
-            signature: None,
-        }));
-    }
-    content
 }
 
 /// Accumulates a single tool call's fragments across streamed deltas.
