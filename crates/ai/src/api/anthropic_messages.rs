@@ -9,15 +9,16 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{ApiRequest, ChatApi, compute_cost, fail, fail_with_diagnostic, parse_arguments};
+use super::assembler::{MessageAssembler, is_terminal};
+use super::protocol_event::ProtocolEvent;
+use super::{ApiRequest, ChatApi, compute_cost};
 use crate::CacheRetention;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::provider::AnthropicCompat;
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
-    AssistantContent, AssistantMessage, Context, Message, Model, StopReason, TextContent,
-    ThinkingContent, ToolCall, Usage,
+    AssistantContent, AssistantMessage, Context, Message, Model, StopReason, ThinkingContent, Usage,
 };
 
 /// The Anthropic Messages wire protocol.
@@ -62,11 +63,11 @@ impl ChatApi for AnthropicMessages {
             .flatten();
 
         let stream = async_stream::stream! {
-            let mut message = AssistantMessage::streaming(&model_id, &provider, API_NAME);
-            yield AssistantMessageEvent::Start { partial: message.clone() };
+            let mut assembler = MessageAssembler::new(AssistantMessage::streaming(&model_id, &provider, API_NAME));
+            yield AssistantMessageEvent::Start { partial: assembler.partial().clone() };
 
             let Some(api_key) = api_key else {
-                yield fail(&mut message, crate::ErrorKind::Api, "no API key configured");
+                yield assembler.fail(crate::ErrorKind::Api, "no API key configured", Vec::new());
                 return;
             };
 
@@ -85,48 +86,51 @@ impl ChatApi for AnthropicMessages {
                 builder
             };
 
-            let mut blocks: Vec<BlockAccum> = Vec::new();
+            // Wire block kinds, keyed by the Anthropic `index` (reused as the
+            // assembler `block_id`). Tracks which blocks still need a synthetic
+            // end event at finalization — Anthropic omits `content_block_stop`
+            // in some streams (e.g. after `redacted_thinking`).
+            let mut blocks: Vec<Option<WireBlock>> = Vec::new();
             let mut usage = Usage::default();
             let mut stop_reason = StopReason::Stop;
+            // `message_stop` is the only success signal; a bare EOF without it
+            // is a dropped connection, not a completed response.
+            let mut saw_message_stop = false;
 
             let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay));
             'outer: while let Some(exec_event) = exec.next().await {
                 let data = match exec_event {
                     ExecutorEvent::Retry { attempt, max_attempts, delay, kind } => {
-                        yield AssistantMessageEvent::Retry {
-                            attempt,
-                            max_attempts,
-                            delay,
-                            kind,
-                            partial: message.clone(),
-                        };
+                        if let Some(event) = assembler.apply(ProtocolEvent::Retry { attempt, max_attempts, delay, kind }) {
+                            yield event;
+                        }
                         continue;
                     }
                     ExecutorEvent::Established { request_id } => {
-                        message.response_id = request_id;
+                        let _ = assembler.apply(ProtocolEvent::ResponseMetadata { response_id: request_id, response_model: None });
                         continue;
                     }
                     ExecutorEvent::Eof => break 'outer,
                     ExecutorEvent::Failed { kind, message: detail, diagnostics } => {
-                        message.diagnostics.extend(diagnostics);
-                        yield fail(&mut message, kind, &detail);
+                        yield assembler.fail(kind, detail, diagnostics);
                         return;
                     }
                     ExecutorEvent::Event(sse_event) => sse_event,
                 };
+                let event_field = data.event;
                 let value = match super::parse_sse_json(data.data) {
                     Ok(value) => value,
                     Err((detail, diagnostic)) => {
-                        yield fail_with_diagnostic(&mut message, crate::ErrorKind::Protocol, &detail, diagnostic);
+                        yield assembler.fail(crate::ErrorKind::Protocol, detail, vec![diagnostic]);
                         return;
                     }
                 };
-                if data.event.as_deref() == Some("error")
+                if event_field.as_deref() == Some("error")
                     || value.get("type").and_then(Value::as_str) == Some("error")
                 {
                     let detail = http::json_error_summary(&value)
                         .unwrap_or_else(|| "provider returned an error".to_string());
-                    yield fail(&mut message, crate::ErrorKind::Api, &detail);
+                    yield assembler.fail(crate::ErrorKind::Api, detail, Vec::new());
                     return;
                 }
                 match value.get("type").and_then(Value::as_str) {
@@ -142,80 +146,75 @@ impl ChatApi for AnthropicMessages {
                     }
                     Some("content_block_start") => {
                         let index = value["index"].as_u64().unwrap_or(0) as usize;
+                        let block_id = index as u64;
                         let block = &value["content_block"];
-                        let accum = match block["type"].as_str() {
-                            Some("thinking") => BlockAccum::Thinking {
-                                text: String::new(),
+                        let (kind, start) = match block["type"].as_str() {
+                            Some("thinking") => (WireBlockKind::Thinking, ProtocolEvent::ThinkingStart {
+                                block_id,
                                 signature: None,
                                 redacted: false,
-                            },
+                            }),
                             // Redacted thinking arrives whole: an opaque
                             // payload carried in the signature slot.
-                            Some("redacted_thinking") => BlockAccum::Thinking {
-                                text: String::new(),
+                            Some("redacted_thinking") => (WireBlockKind::Thinking, ProtocolEvent::ThinkingStart {
+                                block_id,
                                 signature: block["data"].as_str().map(str::to_string),
                                 redacted: true,
-                            },
-                            Some("tool_use") => BlockAccum::ToolCall {
+                            }),
+                            Some("tool_use") => (WireBlockKind::ToolCall, ProtocolEvent::ToolCallStart {
+                                block_id,
                                 id: block["id"].as_str().unwrap_or_default().to_string(),
                                 name: block["name"].as_str().unwrap_or_default().to_string(),
-                                arguments: String::new(),
-                            },
-                            _ => BlockAccum::Text(String::new()),
+                            }),
+                            _ => (WireBlockKind::Text, ProtocolEvent::TextStart { block_id, signature: None }),
                         };
                         if blocks.len() <= index {
-                            blocks.resize_with(index + 1, || BlockAccum::Text(String::new()));
+                            blocks.resize_with(index + 1, || None);
                         }
-                        blocks[index] = accum;
+                        blocks[index] = Some(WireBlock { kind, ended: false });
+                        if let Some(event) = assembler.apply(start) {
+                            let terminal = is_terminal(&event);
+                            yield event;
+                            if terminal { return; }
+                        }
                     }
                     Some("content_block_delta") => {
                         let index = value["index"].as_u64().unwrap_or(0) as usize;
-                        let Some(block) = blocks.get_mut(index) else { continue };
+                        let block_id = index as u64;
                         let delta = &value["delta"];
-                        match delta["type"].as_str() {
-                            Some("text_delta") => {
-                                if let (BlockAccum::Text(text), Some(chunk)) =
-                                    (block, delta["text"].as_str())
-                                    && !chunk.is_empty()
-                                {
-                                    text.push_str(chunk);
-                                    message.content = assemble(&blocks);
-                                    yield AssistantMessageEvent::TextDelta {
-                                        content_index: index,
-                                        delta: chunk.to_string(),
-                                        partial: message.clone(),
-                                    };
-                                }
+                        let event = match delta["type"].as_str() {
+                            Some("text_delta") => delta["text"].as_str()
+                                .filter(|chunk| !chunk.is_empty())
+                                .map(|chunk| ProtocolEvent::TextDelta { block_id, delta: chunk.to_string() }),
+                            Some("thinking_delta") => delta["thinking"].as_str()
+                                .filter(|chunk| !chunk.is_empty())
+                                .map(|chunk| ProtocolEvent::ThinkingDelta { block_id, delta: chunk.to_string() }),
+                            Some("signature_delta") => delta["signature"].as_str()
+                                .map(|sig| ProtocolEvent::ThinkingSignature { block_id, signature: sig.to_string() }),
+                            Some("input_json_delta") => delta["partial_json"].as_str()
+                                .map(|fragment| ProtocolEvent::ToolCallDelta { block_id, delta: fragment.to_string() }),
+                            _ => None,
+                        };
+                        if let Some(event) = event
+                            && let Some(event) = assembler.apply(event)
+                        {
+                            let terminal = is_terminal(&event);
+                            yield event;
+                            if terminal { return; }
+                        }
+                    }
+                    Some("content_block_stop") => {
+                        let index = value["index"].as_u64().unwrap_or(0) as usize;
+                        let block_id = index as u64;
+                        if let Some(Some(block)) = blocks.get_mut(index)
+                            && !block.ended
+                        {
+                            block.ended = true;
+                            if let Some(event) = assembler.apply(block.kind.end_event(block_id)) {
+                                let terminal = is_terminal(&event);
+                                yield event;
+                                if terminal { return; }
                             }
-                            Some("thinking_delta") => {
-                                if let (BlockAccum::Thinking { text, .. }, Some(chunk)) =
-                                    (block, delta["thinking"].as_str())
-                                    && !chunk.is_empty()
-                                {
-                                    text.push_str(chunk);
-                                    message.content = assemble(&blocks);
-                                    yield AssistantMessageEvent::ThinkingDelta {
-                                        content_index: index,
-                                        delta: chunk.to_string(),
-                                        partial: message.clone(),
-                                    };
-                                }
-                            }
-                            Some("signature_delta") => {
-                                if let (BlockAccum::Thinking { signature, .. }, Some(sig)) =
-                                    (block, delta["signature"].as_str())
-                                {
-                                    *signature = Some(sig.to_string());
-                                }
-                            }
-                            Some("input_json_delta") => {
-                                if let (BlockAccum::ToolCall { arguments, .. }, Some(fragment)) =
-                                    (block, delta["partial_json"].as_str())
-                                {
-                                    arguments.push_str(fragment);
-                                }
-                            }
-                            _ => {}
                         }
                     }
                     Some("message_delta") => {
@@ -233,17 +232,46 @@ impl ChatApi for AnthropicMessages {
                             usage.cache_write = write;
                         }
                     }
-                    Some("message_stop") => break 'outer,
+                    Some("message_stop") => {
+                        saw_message_stop = true;
+                        break 'outer;
+                    }
                     _ => {}
+                }
+            }
+
+            if !saw_message_stop {
+                yield assembler.fail(
+                    crate::ErrorKind::StreamInterrupted,
+                    "connection closed before message_stop",
+                    Vec::new(),
+                );
+                return;
+            }
+
+            // End any blocks the stream left open (Anthropic may omit
+            // `content_block_stop`). A tool call's arguments are parsed on end,
+            // so this is required for correctness, not just tidiness.
+            for (index, slot) in blocks.iter_mut().enumerate() {
+                if let Some(block) = slot
+                    && !block.ended
+                {
+                    block.ended = true;
+                    if let Some(event) = assembler.apply(block.kind.end_event(index as u64)) {
+                        let terminal = is_terminal(&event);
+                        yield event;
+                        if terminal { return; }
+                    }
                 }
             }
 
             // Anthropic reports no total; derive it from all token classes.
             usage.total_tokens = usage.input + usage.output + usage.cache_read + usage.cache_write;
             usage.cost = compute_cost(&usage, &cost);
-            message.content = assemble(&blocks);
-            message.usage = usage;
-            message.stop_reason = stop_reason;
+            let _ = assembler.apply(ProtocolEvent::Usage(usage));
+            let _ = assembler.apply(ProtocolEvent::Stop(stop_reason));
+
+            let message = assembler.into_message();
             yield AssistantMessageEvent::Done { reason: stop_reason, message };
         };
 
@@ -251,57 +279,30 @@ impl ChatApi for AnthropicMessages {
     }
 }
 
-/// A content block being accumulated across streamed deltas, keyed by index.
-enum BlockAccum {
-    Text(String),
-    Thinking {
-        text: String,
-        signature: Option<String>,
-        redacted: bool,
-    },
-    ToolCall {
-        id: String,
-        name: String,
-        arguments: String,
-    },
+/// The kind of a streamed content block, tracked per wire `index` so a
+/// `content_block_stop` (or a synthetic end at finalization) can emit the
+/// matching `*End` protocol event.
+#[derive(Clone, Copy)]
+enum WireBlockKind {
+    Text,
+    Thinking,
+    ToolCall,
 }
 
-/// Assemble the ordered content blocks into banshu content, dropping empty
-/// text/thinking blocks and parsing tool-call arguments.
-fn assemble(blocks: &[BlockAccum]) -> Vec<AssistantContent> {
-    blocks
-        .iter()
-        .filter_map(|block| match block {
-            BlockAccum::Text(text) if !text.is_empty() => {
-                Some(AssistantContent::Text(TextContent {
-                    text: text.clone(),
-                    signature: None,
-                }))
-            }
-            BlockAccum::Thinking {
-                text,
-                signature,
-                redacted,
-            } if !text.is_empty() || *redacted => {
-                Some(AssistantContent::Thinking(ThinkingContent {
-                    thinking: text.clone(),
-                    signature: signature.clone(),
-                    redacted: *redacted,
-                }))
-            }
-            BlockAccum::ToolCall {
-                id,
-                name,
-                arguments,
-            } => Some(AssistantContent::ToolCall(ToolCall {
-                id: id.clone(),
-                name: name.clone(),
-                arguments: parse_arguments(arguments),
-                raw_arguments: Some(arguments.clone()),
-            })),
-            _ => None,
-        })
-        .collect()
+impl WireBlockKind {
+    fn end_event(self, block_id: u64) -> ProtocolEvent {
+        match self {
+            WireBlockKind::Text => ProtocolEvent::TextEnd { block_id },
+            WireBlockKind::Thinking => ProtocolEvent::ThinkingEnd { block_id },
+            WireBlockKind::ToolCall => ProtocolEvent::ToolCallEnd { block_id },
+        }
+    }
+}
+
+/// A streamed content block, keyed by its Anthropic wire `index`.
+struct WireBlock {
+    kind: WireBlockKind,
+    ended: bool,
 }
 
 /// Serialize a thinking block for history replay. Redacted payloads go back
