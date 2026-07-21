@@ -85,8 +85,16 @@ pub enum AssistantMessageEvent {
 }
 
 /// A stream of [`AssistantMessageEvent`]s with a terminal [`AssistantMessage`].
+///
+/// Alongside driving it as a [`Stream`], a caller can inspect progress without
+/// consuming events itself: [`partial`](Self::partial) reflects the latest
+/// snapshot seen so far, [`result`](Self::result) is `Some` once a terminal
+/// `Done`/`Error` has passed through, and [`finish`](Self::finish) drives any
+/// remaining events and returns the final message.
 pub struct MessageStream {
     inner: Pin<Box<dyn Stream<Item = AssistantMessageEvent> + Send>>,
+    partial: AssistantMessage,
+    terminal: Option<AssistantMessage>,
 }
 
 impl MessageStream {
@@ -94,6 +102,10 @@ impl MessageStream {
     pub fn new(stream: impl Stream<Item = AssistantMessageEvent> + Send + 'static) -> Self {
         Self {
             inner: Box::pin(stream),
+            // Placeholder until the stream's own `Start` event replaces it;
+            // every adapter yields `Start` before anything else.
+            partial: AssistantMessage::streaming("", "", ""),
+            terminal: None,
         }
     }
 
@@ -111,27 +123,75 @@ impl MessageStream {
         Self::new(futures_util::stream::once(async move { event }))
     }
 
+    /// The message as assembled from every event observed so far (via
+    /// [`Stream::poll_next`], [`finish`](Self::finish), or
+    /// [`final_message`](Self::final_message)). Before the first event, this
+    /// is an empty placeholder.
+    pub fn partial(&self) -> &AssistantMessage {
+        &self.partial
+    }
+
+    /// The final message, once a terminal `Done`/`Error` event has been
+    /// observed. `None` until then.
+    pub fn result(&self) -> Option<&AssistantMessage> {
+        self.terminal.as_ref()
+    }
+
+    /// Drive any not-yet-consumed events to completion and return the final
+    /// message.
+    ///
+    /// This never returns a `Result`: failures arrive as an `Error` event whose
+    /// message has `stop_reason` `Error`/`Aborted` and an `error_message`.
+    pub async fn finish(&mut self) -> AssistantMessage {
+        while self.terminal.is_none() {
+            if self.next().await.is_none() {
+                break;
+            }
+        }
+        self.terminal
+            .clone()
+            .expect("stream ended without a terminal Done or Error event")
+    }
+
     /// Drive the stream to completion and return the final message.
     ///
     /// This never returns a `Result`: failures arrive as an `Error` event whose
     /// message has `stop_reason` `Error`/`Aborted` and an `error_message`.
     pub async fn final_message(mut self) -> AssistantMessage {
-        let mut last: Option<AssistantMessage> = None;
-        while let Some(event) = self.inner.next().await {
-            match event {
-                AssistantMessageEvent::Done { message, .. } => last = Some(message),
-                AssistantMessageEvent::Error { error, .. } => last = Some(error),
-                _ => {}
+        self.finish().await
+    }
+
+    /// Update `partial`/`terminal` from an observed event.
+    fn record(&mut self, event: &AssistantMessageEvent) {
+        match event {
+            AssistantMessageEvent::Start { partial }
+            | AssistantMessageEvent::TextDelta { partial, .. }
+            | AssistantMessageEvent::ThinkingDelta { partial, .. }
+            | AssistantMessageEvent::ToolCallEnd { partial, .. }
+            | AssistantMessageEvent::Retry { partial, .. } => {
+                self.partial = partial.clone();
+            }
+            AssistantMessageEvent::Done { message, .. } => {
+                self.partial = message.clone();
+                self.terminal = Some(message.clone());
+            }
+            AssistantMessageEvent::Error { error, .. } => {
+                self.partial = error.clone();
+                self.terminal = Some(error.clone());
             }
         }
-        last.expect("stream ended without a terminal Done or Error event")
     }
 }
 
 impl Stream for MessageStream {
     type Item = AssistantMessageEvent;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(cx)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let poll = this.inner.as_mut().poll_next(cx);
+        if let Poll::Ready(Some(event)) = &poll {
+            this.record(event);
+        }
+        poll
     }
 }

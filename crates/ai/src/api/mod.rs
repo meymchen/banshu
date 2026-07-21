@@ -7,6 +7,9 @@
 pub mod anthropic_messages;
 pub mod openai_completions;
 
+mod assembler;
+mod protocol_event;
+
 use crate::options::StreamOptions;
 use crate::provider::{AnthropicCompat, OpenAiCompat};
 use crate::stream::{AssistantMessageEvent, MessageStream};
