@@ -34,4 +34,8 @@ pub struct StreamOptions {
     /// Stable conversation identifier used by providers that support
     /// cache-routing keys or session-affinity headers.
     pub session_id: Option<String>,
+    /// Cap on how long a server-requested `Retry-After` may ask the client to
+    /// wait before the executor gives up and fails as `RateLimited` instead of
+    /// sleeping. `None` uses the default of 60 seconds.
+    pub max_retry_delay: Option<Duration>,
 }

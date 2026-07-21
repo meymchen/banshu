@@ -314,6 +314,127 @@ async fn anthropic_path_retries_overloaded() {
 }
 
 #[tokio::test]
+async fn retry_after_http_date_is_honored_for_rate_limits() {
+    let server = MockServer::start().await;
+    let target = std::time::SystemTime::now() + Duration::from_secs(2);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", httpdate::fmt_http_date(target))
+                .set_body_string("too many requests"),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(sse_response(OPENAI_SSE_BODY))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider =
+        Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
+    let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
+
+    let events = collect_events(&provider, &model, &options_with_key()).await;
+
+    let retries = retries(&events);
+    assert_eq!(retries.len(), 1, "expected exactly one Retry event");
+    let (attempt, max_attempts, delay, kind) = retries[0];
+    assert_eq!(
+        (attempt, max_attempts, kind),
+        (1, 3, ErrorKind::RateLimited)
+    );
+    // The header has whole-second resolution and parsing races the clock, so
+    // check a tolerant range rather than an exact duration.
+    assert!(
+        delay >= Duration::from_millis(500) && delay <= Duration::from_secs(3),
+        "expected a delay close to 2s from the HTTP-date, got {delay:?}"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AssistantMessageEvent::Done { .. })
+    ));
+}
+
+#[tokio::test]
+async fn retry_after_beyond_the_default_cap_terminates_as_rate_limited() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "120")
+                .set_body_string("too many requests"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider =
+        Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
+    let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
+
+    let events = collect_events(&provider, &model, &options_with_key()).await;
+
+    assert!(
+        retries(&events).is_empty(),
+        "a Retry-After beyond the cap must not sleep and retry"
+    );
+    let Some(AssistantMessageEvent::Error { error, .. }) = events.last() else {
+        panic!("expected a terminal Error event, got {:?}", events.last());
+    };
+    assert_eq!(error.error_kind, Some(ErrorKind::RateLimited));
+    assert!(
+        error.diagnostics.iter().any(|d| d.message.contains("120")),
+        "diagnostic should record the server-requested wait: {:?}",
+        error.diagnostics
+    );
+}
+
+#[tokio::test]
+async fn max_retry_delay_option_lowers_the_cap() {
+    // A 5s Retry-After is well within the 60s default cap and would normally
+    // be honored (and slept) — but with the cap explicitly lowered below it,
+    // the same request must terminate immediately instead of sleeping at
+    // all, proving `StreamOptions.max_retry_delay` is actually read rather
+    // than only the built-in default ever applying.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "5")
+                .set_body_string("too many requests"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider =
+        Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["DEEPSEEK_API_KEY"]);
+    let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
+    let options = StreamOptions {
+        max_retry_delay: Some(Duration::from_secs(2)),
+        ..options_with_key()
+    };
+
+    let events = collect_events(&provider, &model, &options).await;
+
+    assert!(
+        retries(&events).is_empty(),
+        "a Retry-After beyond the lowered cap must not sleep and retry"
+    );
+    let Some(AssistantMessageEvent::Error { error, .. }) = events.last() else {
+        panic!("expected a terminal Error event, got {:?}", events.last());
+    };
+    assert_eq!(error.error_kind, Some(ErrorKind::RateLimited));
+}
+
+#[tokio::test]
 async fn auth_failure_is_terminal_with_auth_kind() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
