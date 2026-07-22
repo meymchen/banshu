@@ -29,10 +29,7 @@ async fn http_error_status_becomes_a_terminal_error_message() {
         ..Default::default()
     };
 
-    let message = provider
-        .stream(&model, &context, &options)
-        .final_message()
-        .await;
+    let message = provider.stream(&model, &context, &options).finish().await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
     let error = message.error_message.expect("expected an error message");
@@ -60,7 +57,7 @@ async fn unresolved_api_key_becomes_a_terminal_error_message() {
 
     let message = provider
         .stream(&model, &context, &StreamOptions::default())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);

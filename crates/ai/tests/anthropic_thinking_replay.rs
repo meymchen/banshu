@@ -87,7 +87,7 @@ async fn replays_signed_thinking_blocks() {
     ]);
     provider(&server)
         .stream(&model(&server), &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let content = &request_body(&server).await["messages"][1]["content"];
@@ -108,7 +108,7 @@ async fn downgrades_signatureless_thinking_to_text() {
     ]);
     provider(&server)
         .stream(&model(&server), &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let content = &request_body(&server).await["messages"][1]["content"];
@@ -133,7 +133,7 @@ async fn preserves_empty_signature_when_allowed() {
             ..AnthropicCompat::default()
         })
         .stream(&model(&server), &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let content = &request_body(&server).await["messages"][1]["content"];
@@ -160,7 +160,7 @@ async fn round_trips_redacted_thinking() {
     .await;
     let message = provider(&capture)
         .stream(&model(&capture), &Context::new().user("hi"), &options())
-        .final_message()
+        .finish()
         .await;
 
     let block = message
@@ -183,7 +183,7 @@ async fn round_trips_redacted_thinking() {
         .user("go on");
     provider(&replay)
         .stream(&model(&replay), &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let content = &request_body(&replay).await["messages"][1]["content"];

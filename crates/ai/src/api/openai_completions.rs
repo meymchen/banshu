@@ -61,7 +61,7 @@ impl ChatApi for OpenAiCompletions {
 
         let stream = async_stream::stream! {
             let mut assembler = MessageAssembler::new(AssistantMessage::streaming(&model_id, &provider, API_NAME));
-            yield AssistantMessageEvent::Start { partial: assembler.partial().clone() };
+            yield AssistantMessageEvent::Start;
 
             let Some(api_key) = api_key else {
                 yield assembler.fail(crate::ErrorKind::Api, "no API key configured", Vec::new());
@@ -250,21 +250,23 @@ impl ChatApi for OpenAiCompletions {
                 return;
             }
 
-            // Closing an already-started block only ever fails as a protocol
-            // violation (an unknown/already-ended/mismatched block), which is
-            // always terminal — unlike the Start/Delta sites above, there's no
-            // non-terminal `Some` to distinguish here.
+            // Each `*End` now emits a public `TextEnd`/`ThinkingEnd` event
+            // carrying the finished content; a protocol violation (unknown/
+            // already-ended/mismatched block) instead comes back as a terminal
+            // `Error`, so every site checks `is_terminal` before continuing.
             if let Some(block_id) = thinking_block_id
                 && let Some(event) = assembler.apply(ProtocolEvent::ThinkingEnd { block_id })
             {
+                let terminal = is_terminal(&event);
                 yield event;
-                return;
+                if terminal { return; }
             }
             if let Some(block_id) = text_block_id
                 && let Some(event) = assembler.apply(ProtocolEvent::TextEnd { block_id })
             {
+                let terminal = is_terminal(&event);
                 yield event;
-                return;
+                if terminal { return; }
             }
 
             // v0.3 collapses a tool call's fragments into one Start+Delta+End
@@ -276,12 +278,14 @@ impl ChatApi for OpenAiCompletions {
                 let block_id = next_block_id;
                 next_block_id += 1;
                 if let Some(event) = assembler.apply(ProtocolEvent::ToolCallStart { block_id, id: accum.id, name: accum.name }) {
+                    let terminal = is_terminal(&event);
                     yield event;
-                    return;
+                    if terminal { return; }
                 }
                 if let Some(event) = assembler.apply(ProtocolEvent::ToolCallDelta { block_id, delta: accum.arguments }) {
+                    let terminal = is_terminal(&event);
                     yield event;
-                    return;
+                    if terminal { return; }
                 }
                 if let Some(event) = assembler.apply(ProtocolEvent::ToolCallEnd { block_id }) {
                     let terminal = is_terminal(&event);
