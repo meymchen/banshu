@@ -36,10 +36,7 @@ async fn eof_without_message_stop_is_stream_interrupted() {
         ..Default::default()
     };
 
-    let message = provider
-        .stream(&model, &context, &options)
-        .final_message()
-        .await;
+    let message = provider.stream(&model, &context, &options).finish().await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
     assert_eq!(message.error_kind, Some(ErrorKind::StreamInterrupted));

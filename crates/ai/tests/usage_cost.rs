@@ -40,10 +40,7 @@ async fn computes_cost_from_model_rates() {
         ..Default::default()
     };
 
-    let message = provider
-        .stream(&model, &context, &options)
-        .final_message()
-        .await;
+    let message = provider.stream(&model, &context, &options).finish().await;
 
     let cost = &message.usage.cost;
     let close = |a: f64, b: f64| (a - b).abs() < 1e-9;

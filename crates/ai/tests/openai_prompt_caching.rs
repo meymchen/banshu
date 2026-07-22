@@ -61,7 +61,7 @@ async fn normalizes_openai_cache_read_and_write_usage_and_cost() {
 
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.usage.input, 400_000);
@@ -102,7 +102,7 @@ async fn normalizes_deepseek_hit_and_miss_usage_without_double_counting() {
 
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.usage.input, 300_000);
@@ -133,7 +133,7 @@ async fn reads_moonshot_usage_from_the_choice() {
     let provider = Provider::openai_compatible("moonshot", "Moonshot", server.uri(), ["X"]);
     let message = provider
         .stream(&model(&server), &Context::new().user("hi"), &options())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.usage.input, 4);
@@ -161,7 +161,7 @@ async fn sends_openai_cache_key_and_long_retention_when_declared() {
     };
     provider
         .stream(&model(&server), &Context::new().user("hi"), &options)
-        .final_message()
+        .finish()
         .await;
 
     let requests = server.received_requests().await.expect("request journal");
@@ -192,7 +192,7 @@ async fn generic_or_disabled_providers_send_no_openai_cache_extensions() {
         };
         provider
             .stream(&model(&server), &Context::new().user("hi"), &options)
-            .final_message()
+            .finish()
             .await;
 
         let requests = server.received_requests().await.expect("request journal");
@@ -219,7 +219,7 @@ async fn sends_session_affinity_headers_only_when_enabled() {
     };
     provider
         .stream(&model(&server), &Context::new().user("hi"), &options)
-        .final_message()
+        .finish()
         .await;
 
     let requests = server.received_requests().await.expect("request journal");

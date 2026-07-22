@@ -30,7 +30,7 @@ async fn json_error_message_and_code_are_extracted_into_error_message() {
     let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options_with_key())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
@@ -61,7 +61,7 @@ async fn oversized_error_body_is_capped_before_message_extraction() {
     let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options_with_key())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
@@ -96,7 +96,7 @@ async fn error_body_diagnostic_redacts_secrets_but_original_body_had_them() {
     let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options_with_key())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);

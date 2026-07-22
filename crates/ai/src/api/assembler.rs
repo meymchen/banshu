@@ -56,11 +56,6 @@ impl MessageAssembler {
         }
     }
 
-    /// The message as assembled so far.
-    pub(crate) fn partial(&self) -> &AssistantMessage {
-        &self.message
-    }
-
     /// Consume the assembler, returning the final assembled message.
     pub(crate) fn into_message(self) -> AssistantMessage {
         self.message
@@ -100,14 +95,14 @@ impl MessageAssembler {
                 block_id,
                 signature,
             } => match self.start_block(block_id, BlockKind::Text) {
-                Ok(()) => {
+                Ok(content_index) => {
                     self.message
                         .content
                         .push(AssistantContent::Text(TextContent {
                             text: String::new(),
                             signature,
                         }));
-                    None
+                    Some(AssistantMessageEvent::TextStart { content_index })
                 }
                 Err(detail) => Some(self.violation(detail)),
             },
@@ -122,7 +117,6 @@ impl MessageAssembler {
                         Some(AssistantMessageEvent::TextDelta {
                             content_index,
                             delta,
-                            partial: self.message.clone(),
                         })
                     }
                     Err(detail) => Some(self.violation(detail)),
@@ -130,9 +124,16 @@ impl MessageAssembler {
             }
             ProtocolEvent::TextEnd { block_id } => {
                 match self.find_block(block_id, BlockKind::Text, "end") {
-                    Ok(_) => {
+                    Ok(content_index) => {
                         self.end_block(block_id);
-                        None
+                        let content = match &self.message.content[content_index] {
+                            AssistantContent::Text(text) => text.clone(),
+                            _ => unreachable!("content_index was assigned to a Text block"),
+                        };
+                        Some(AssistantMessageEvent::TextEnd {
+                            content_index,
+                            content,
+                        })
                     }
                     Err(detail) => Some(self.violation(detail)),
                 }
@@ -142,7 +143,7 @@ impl MessageAssembler {
                 signature,
                 redacted,
             } => match self.start_block(block_id, BlockKind::Thinking) {
-                Ok(()) => {
+                Ok(content_index) => {
                     self.message
                         .content
                         .push(AssistantContent::Thinking(ThinkingContent {
@@ -150,7 +151,7 @@ impl MessageAssembler {
                             signature,
                             redacted,
                         }));
-                    None
+                    Some(AssistantMessageEvent::ThinkingStart { content_index })
                 }
                 Err(detail) => Some(self.violation(detail)),
             },
@@ -165,7 +166,6 @@ impl MessageAssembler {
                         Some(AssistantMessageEvent::ThinkingDelta {
                             content_index,
                             delta,
-                            partial: self.message.clone(),
                         })
                     }
                     Err(detail) => Some(self.violation(detail)),
@@ -187,16 +187,23 @@ impl MessageAssembler {
             },
             ProtocolEvent::ThinkingEnd { block_id } => {
                 match self.find_block(block_id, BlockKind::Thinking, "end") {
-                    Ok(_) => {
+                    Ok(content_index) => {
                         self.end_block(block_id);
-                        None
+                        let content = match &self.message.content[content_index] {
+                            AssistantContent::Thinking(thinking) => thinking.clone(),
+                            _ => unreachable!("content_index was assigned to a Thinking block"),
+                        };
+                        Some(AssistantMessageEvent::ThinkingEnd {
+                            content_index,
+                            content,
+                        })
                     }
                     Err(detail) => Some(self.violation(detail)),
                 }
             }
             ProtocolEvent::ToolCallStart { block_id, id, name } => {
                 match self.start_block(block_id, BlockKind::ToolCall) {
-                    Ok(()) => {
+                    Ok(content_index) => {
                         self.message
                             .content
                             .push(AssistantContent::ToolCall(ToolCall {
@@ -206,7 +213,7 @@ impl MessageAssembler {
                                 raw_arguments: None,
                             }));
                         self.tool_raw.insert(block_id, String::new());
-                        None
+                        Some(AssistantMessageEvent::ToolCallStart { content_index })
                     }
                     Err(detail) => Some(self.violation(detail)),
                 }
@@ -221,7 +228,10 @@ impl MessageAssembler {
                         {
                             tool_call.raw_arguments = Some(raw.clone());
                         }
-                        None
+                        Some(AssistantMessageEvent::ToolCallDelta {
+                            content_index,
+                            delta,
+                        })
                     }
                     Err(detail) => Some(self.violation(detail)),
                 }
@@ -245,7 +255,6 @@ impl MessageAssembler {
                         Some(AssistantMessageEvent::ToolCallEnd {
                             content_index,
                             tool_call,
-                            partial: self.message.clone(),
                         })
                     }
                     Err(detail) => Some(self.violation(detail)),
@@ -277,7 +286,6 @@ impl MessageAssembler {
                 max_attempts,
                 delay,
                 kind,
-                partial: self.message.clone(),
             }),
             ProtocolEvent::Stop(reason) => {
                 self.stopped = true;
@@ -305,7 +313,7 @@ impl MessageAssembler {
     /// `AssistantMessageEvent` embeds a whole `AssistantMessage` and is too
     /// large to return by value from every lookup; callers turn the detail
     /// into an event via [`Self::violation`].
-    fn start_block(&mut self, block_id: u64, kind: BlockKind) -> Result<(), String> {
+    fn start_block(&mut self, block_id: u64, kind: BlockKind) -> Result<usize, String> {
         if self.blocks.contains_key(&block_id) {
             return Err(format!("duplicate start for block {block_id}"));
         }
@@ -318,7 +326,7 @@ impl MessageAssembler {
                 ended: false,
             },
         );
-        Ok(())
+        Ok(content_index)
     }
 
     fn find_block(
@@ -391,21 +399,21 @@ mod tests {
     #[test]
     fn assigns_stable_content_index_in_start_order() {
         let mut a = assembler();
-        assert!(
+        assert!(matches!(
             a.apply(ProtocolEvent::ThinkingStart {
                 block_id: 1,
                 signature: None,
                 redacted: false,
-            })
-            .is_none()
-        );
-        assert!(
+            }),
+            Some(AssistantMessageEvent::ThinkingStart { content_index: 0 })
+        ));
+        assert!(matches!(
             a.apply(ProtocolEvent::TextStart {
                 block_id: 2,
                 signature: None,
-            })
-            .is_none()
-        );
+            }),
+            Some(AssistantMessageEvent::TextStart { content_index: 1 })
+        ));
 
         let event = a
             .apply(ProtocolEvent::ThinkingDelta {
@@ -506,7 +514,13 @@ mod tests {
             block_id: 1,
             signature: None,
         });
-        assert!(a.apply(ProtocolEvent::TextEnd { block_id: 1 }).is_none());
+        assert!(matches!(
+            a.apply(ProtocolEvent::TextEnd { block_id: 1 }),
+            Some(AssistantMessageEvent::TextEnd {
+                content_index: 0,
+                ..
+            })
+        ));
         let event = a
             .apply(ProtocolEvent::TextEnd { block_id: 1 })
             .expect("double end is terminal");

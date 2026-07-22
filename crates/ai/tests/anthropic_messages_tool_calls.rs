@@ -48,10 +48,7 @@ async fn assembles_a_streamed_tool_call() {
         ..Default::default()
     };
 
-    let message = provider
-        .stream(&model, &context, &options)
-        .final_message()
-        .await;
+    let message = provider.stream(&model, &context, &options).finish().await;
 
     assert_eq!(message.stop_reason, StopReason::ToolUse);
     let tool_call = message
@@ -92,10 +89,7 @@ async fn preserves_malformed_tool_call_arguments() {
         ..Default::default()
     };
 
-    let message = provider
-        .stream(&model, &context, &options)
-        .final_message()
-        .await;
+    let message = provider.stream(&model, &context, &options).finish().await;
 
     let tool_call = message
         .content

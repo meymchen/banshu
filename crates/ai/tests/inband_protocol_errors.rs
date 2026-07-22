@@ -37,7 +37,7 @@ async fn openai_inband_json_error_terminates_as_error_not_done() {
     let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options_with_key())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
@@ -65,7 +65,7 @@ async fn anthropic_event_error_terminates_as_error_not_done() {
     let model = Model::anthropic_messages("kimi-for-coding").with_base_url(server.uri());
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options_with_key())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
@@ -90,7 +90,7 @@ async fn anthropic_type_error_without_named_event_terminates_as_error() {
     let model = Model::anthropic_messages("kimi-for-coding").with_base_url(server.uri());
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options_with_key())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
@@ -119,7 +119,7 @@ async fn openai_corrupted_json_does_not_produce_done() {
     let model = Model::openai_completions("deepseek-chat").with_base_url(server.uri());
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options_with_key())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
@@ -141,7 +141,7 @@ async fn anthropic_corrupted_json_does_not_produce_done() {
     let model = Model::anthropic_messages("kimi-for-coding").with_base_url(server.uri());
     let message = provider
         .stream(&model, &Context::new().user("hi"), &options_with_key())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);

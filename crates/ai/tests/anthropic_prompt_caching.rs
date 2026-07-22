@@ -71,7 +71,7 @@ async fn caches_system_prompt_tools_and_last_user_message_by_default() {
         .user("hi");
     provider(&server)
         .stream(&model(&server), &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let body = request_body(&server).await;
@@ -102,7 +102,7 @@ async fn long_retention_requests_the_one_hour_ttl() {
     };
     provider(&server)
         .stream(&model(&server), &context, &options)
-        .final_message()
+        .finish()
         .await;
 
     let body = request_body(&server).await;
@@ -129,7 +129,7 @@ async fn disabled_retention_sends_no_cache_control() {
     };
     provider(&server)
         .stream(&model(&server), &context, &options)
-        .final_message()
+        .finish()
         .await;
 
     let body = request_body(&server).await;
@@ -159,7 +159,7 @@ async fn attaches_the_breakpoint_to_a_trailing_tool_result() {
             .tool_result("call_1", "get_weather", "72F and sunny");
     provider(&server)
         .stream(&model(&server), &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let body = request_body(&server).await;
@@ -202,7 +202,7 @@ async fn reads_cache_usage_and_bills_one_hour_writes_at_twice_the_input_rate() {
 
     let message = provider(&server)
         .stream(&model, &Context::new().user("hi"), &options())
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.usage.input, 100);
@@ -237,7 +237,7 @@ async fn sends_session_affinity_header_only_when_declared_and_caching() {
         };
         provider
             .stream(&model(&server), &Context::new().user("hi"), &options)
-            .final_message()
+            .finish()
             .await;
 
         let requests = server.received_requests().await.expect("request journal");

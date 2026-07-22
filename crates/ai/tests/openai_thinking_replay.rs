@@ -76,7 +76,7 @@ async fn records_the_reasoning_source_field_as_the_signature() {
     let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"]);
     let message = provider
         .stream(&model(&server), &Context::new().user("2+2?"), &options())
-        .final_message()
+        .finish()
         .await;
 
     let block = message
@@ -112,7 +112,7 @@ async fn replays_thinking_under_its_source_field() {
     let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"]);
     provider
         .stream(&model(&server), &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let assistant = &request_body(&server).await["messages"][1];
@@ -142,7 +142,7 @@ async fn drops_signatureless_thinking_on_replay() {
     let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"]);
     provider
         .stream(&model(&server), &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let assistant = &request_body(&server).await["messages"][1];
@@ -173,10 +173,7 @@ async fn backfills_empty_reasoning_content_for_reasoning_models_when_required() 
                 AssistantMessage::from_content(vec![text("The answer is 4.")]),
             )))
             .user("And 3+3?");
-        provider
-            .stream(&model, &context, &options())
-            .final_message()
-            .await;
+        provider.stream(&model, &context, &options()).finish().await;
 
         let assistant = &request_body(&server).await["messages"][1];
         assert_eq!(
@@ -205,7 +202,7 @@ async fn deepseek_provider_requires_reasoning_content_by_default() {
         .user("And 3+3?");
     Provider::deepseek()
         .stream(&model, &context, &options())
-        .final_message()
+        .finish()
         .await;
 
     let assistant = &request_body(&server).await["messages"][1];

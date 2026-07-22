@@ -13,18 +13,24 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 
 use crate::error::ErrorKind;
-use crate::types::{AssistantMessage, StopReason, ToolCall};
+use crate::types::{
+    AssistantContent, AssistantMessage, StopReason, TextContent, ThinkingContent, ToolCall,
+};
 
 /// A single incremental event in a streamed assistant response.
 ///
-/// Every event after `Start` carries a `partial` snapshot of the message as
-/// assembled so far, so a consumer can render without tracking state itself.
+/// Non-terminal events carry only their own incremental payload — never a full
+/// message snapshot. A consumer that wants the message assembled so far reads
+/// [`MessageStream::partial`]; the complete message travels exactly once, on
+/// the terminal [`Done`](Self::Done)/[`Error`](Self::Error) event.
 #[derive(Debug, Clone)]
 pub enum AssistantMessageEvent {
     /// Emitted once at the start, before any content.
-    Start {
-        /// The empty message being assembled.
-        partial: AssistantMessage,
+    Start,
+    /// A text content block has begun.
+    TextStart {
+        /// Index of the content block.
+        content_index: usize,
     },
     /// A chunk of text output.
     TextDelta {
@@ -32,8 +38,18 @@ pub enum AssistantMessageEvent {
         content_index: usize,
         /// The appended text.
         delta: String,
-        /// Snapshot of the message so far.
-        partial: AssistantMessage,
+    },
+    /// A text content block is complete.
+    TextEnd {
+        /// Index of the content block.
+        content_index: usize,
+        /// The completed text content.
+        content: TextContent,
+    },
+    /// A reasoning content block has begun.
+    ThinkingStart {
+        /// Index of the content block.
+        content_index: usize,
     },
     /// A chunk of reasoning output.
     ThinkingDelta {
@@ -41,8 +57,25 @@ pub enum AssistantMessageEvent {
         content_index: usize,
         /// The appended reasoning text.
         delta: String,
-        /// Snapshot of the message so far.
-        partial: AssistantMessage,
+    },
+    /// A reasoning content block is complete.
+    ThinkingEnd {
+        /// Index of the content block.
+        content_index: usize,
+        /// The completed reasoning content.
+        content: ThinkingContent,
+    },
+    /// A tool-call content block has begun.
+    ToolCallStart {
+        /// Index of the content block.
+        content_index: usize,
+    },
+    /// A fragment of the tool call's arguments JSON.
+    ToolCallDelta {
+        /// Index of the content block this delta belongs to.
+        content_index: usize,
+        /// The appended arguments fragment.
+        delta: String,
     },
     /// A completed tool call.
     ToolCallEnd {
@@ -50,8 +83,6 @@ pub enum AssistantMessageEvent {
         content_index: usize,
         /// The assembled tool call.
         tool_call: ToolCall,
-        /// Snapshot of the message so far.
-        partial: AssistantMessage,
     },
     /// The request failed before the response stream started and will be
     /// re-sent after `delay`. Emitted so UIs can show retry progress instead
@@ -65,8 +96,6 @@ pub enum AssistantMessageEvent {
         delay: Duration,
         /// Classification of the failure that triggered the retry.
         kind: ErrorKind,
-        /// Snapshot of the (still empty) message.
-        partial: AssistantMessage,
     },
     /// Terminal success — the final assembled message.
     Done {
@@ -124,9 +153,14 @@ impl MessageStream {
     }
 
     /// The message as assembled from every event observed so far (via
-    /// [`Stream::poll_next`], [`finish`](Self::finish), or
-    /// [`final_message`](Self::final_message)). Before the first event, this
-    /// is an empty placeholder.
+    /// [`Stream::poll_next`] or [`finish`](Self::finish)). Before the first
+    /// event, this is an empty placeholder; its `model`/`provider` are filled
+    /// in only once the terminal `Done`/`Error` message arrives.
+    ///
+    /// A tool call in progress reads back with an empty `id`/`name` and `{}`
+    /// arguments until its `ToolCallEnd` — the public `ToolCallStart` event
+    /// carries no identity, so the completed call only appears on the terminal
+    /// message and at end-of-block.
     pub fn partial(&self) -> &AssistantMessage {
         &self.partial
     }
@@ -153,23 +187,99 @@ impl MessageStream {
             .expect("stream ended without a terminal Done or Error event")
     }
 
-    /// Drive the stream to completion and return the final message.
+    /// Fold an observed event into `partial`, and capture `terminal` on the
+    /// terminal `Done`/`Error`.
     ///
-    /// This never returns a `Result`: failures arrive as an `Error` event whose
-    /// message has `stop_reason` `Error`/`Aborted` and an `error_message`.
-    pub async fn final_message(mut self) -> AssistantMessage {
-        self.finish().await
-    }
-
-    /// Update `partial`/`terminal` from an observed event.
+    /// Because non-terminal events no longer carry a message snapshot, the
+    /// stream reconstructs `partial` itself by applying each incremental event
+    /// in place — an O(1)-per-event projection that mirrors what the internal
+    /// assembler built, without the per-delta clone.
     fn record(&mut self, event: &AssistantMessageEvent) {
         match event {
-            AssistantMessageEvent::Start { partial }
-            | AssistantMessageEvent::TextDelta { partial, .. }
-            | AssistantMessageEvent::ThinkingDelta { partial, .. }
-            | AssistantMessageEvent::ToolCallEnd { partial, .. }
-            | AssistantMessageEvent::Retry { partial, .. } => {
-                self.partial = partial.clone();
+            AssistantMessageEvent::Start | AssistantMessageEvent::Retry { .. } => {}
+            AssistantMessageEvent::TextStart { .. } => {
+                self.partial
+                    .content
+                    .push(AssistantContent::Text(TextContent {
+                        text: String::new(),
+                        signature: None,
+                    }));
+            }
+            AssistantMessageEvent::TextDelta {
+                content_index,
+                delta,
+            } => {
+                if let Some(AssistantContent::Text(text)) =
+                    self.partial.content.get_mut(*content_index)
+                {
+                    text.text.push_str(delta);
+                }
+            }
+            AssistantMessageEvent::TextEnd {
+                content_index,
+                content,
+            } => {
+                if let Some(slot) = self.partial.content.get_mut(*content_index) {
+                    *slot = AssistantContent::Text(content.clone());
+                }
+            }
+            AssistantMessageEvent::ThinkingStart { .. } => {
+                self.partial
+                    .content
+                    .push(AssistantContent::Thinking(ThinkingContent {
+                        thinking: String::new(),
+                        signature: None,
+                        redacted: false,
+                    }));
+            }
+            AssistantMessageEvent::ThinkingDelta {
+                content_index,
+                delta,
+            } => {
+                if let Some(AssistantContent::Thinking(thinking)) =
+                    self.partial.content.get_mut(*content_index)
+                {
+                    thinking.thinking.push_str(delta);
+                }
+            }
+            AssistantMessageEvent::ThinkingEnd {
+                content_index,
+                content,
+            } => {
+                if let Some(slot) = self.partial.content.get_mut(*content_index) {
+                    *slot = AssistantContent::Thinking(content.clone());
+                }
+            }
+            AssistantMessageEvent::ToolCallStart { .. } => {
+                self.partial
+                    .content
+                    .push(AssistantContent::ToolCall(ToolCall {
+                        id: String::new(),
+                        name: String::new(),
+                        arguments: serde_json::json!({}),
+                        raw_arguments: None,
+                    }));
+            }
+            AssistantMessageEvent::ToolCallDelta {
+                content_index,
+                delta,
+            } => {
+                if let Some(AssistantContent::ToolCall(tool_call)) =
+                    self.partial.content.get_mut(*content_index)
+                {
+                    tool_call
+                        .raw_arguments
+                        .get_or_insert_default()
+                        .push_str(delta);
+                }
+            }
+            AssistantMessageEvent::ToolCallEnd {
+                content_index,
+                tool_call,
+            } => {
+                if let Some(slot) = self.partial.content.get_mut(*content_index) {
+                    *slot = AssistantContent::ToolCall(tool_call.clone());
+                }
             }
             AssistantMessageEvent::Done { message, .. } => {
                 self.partial = message.clone();

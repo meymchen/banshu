@@ -157,10 +157,7 @@ async fn openai_serializes_assistant_tool_call_and_tool_result() {
         api_key: Some("k".into()),
         ..Default::default()
     };
-    provider
-        .stream(&model, &history(), &options)
-        .final_message()
-        .await;
+    provider.stream(&model, &history(), &options).finish().await;
 }
 
 #[tokio::test]
@@ -186,8 +183,5 @@ async fn anthropic_serializes_tool_use_and_tool_result() {
         api_key: Some("k".into()),
         ..Default::default()
     };
-    provider
-        .stream(&model, &history(), &options)
-        .final_message()
-        .await;
+    provider.stream(&model, &history(), &options).finish().await;
 }

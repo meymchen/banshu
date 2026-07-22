@@ -43,10 +43,10 @@ async fn partial_and_result_track_stream_progress() {
     let mut stream = provider.stream(&model, &context, &options);
     assert!(stream.result().is_none());
 
-    // Drain Start + both TextDelta events; the terminal Done hasn't arrived
-    // yet, so result() must still be None while partial() already reflects
-    // both deltas.
-    for _ in 0..3 {
+    // Drain Start + TextStart + both TextDelta events; the terminal Done
+    // hasn't arrived yet (TextEnd + Done still pending), so result() must
+    // still be None while partial() already reflects both deltas.
+    for _ in 0..4 {
         stream.next().await.expect("expected an event");
     }
     assert!(stream.result().is_none());

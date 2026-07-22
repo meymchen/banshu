@@ -64,7 +64,7 @@ impl ChatApi for AnthropicMessages {
 
         let stream = async_stream::stream! {
             let mut assembler = MessageAssembler::new(AssistantMessage::streaming(&model_id, &provider, API_NAME));
-            yield AssistantMessageEvent::Start { partial: assembler.partial().clone() };
+            yield AssistantMessageEvent::Start;
 
             let Some(api_key) = api_key else {
                 yield assembler.fail(crate::ErrorKind::Api, "no API key configured", Vec::new());
