@@ -74,7 +74,7 @@ async fn stream_dispatches_to_the_owning_provider() {
     };
     let message = models
         .stream(&model, &Context::new().user("hi"), &options)
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Stop);
@@ -92,7 +92,7 @@ async fn stream_for_an_unregistered_provider_is_an_in_band_error() {
             &Context::new().user("hi"),
             &StreamOptions::default(),
         )
-        .final_message()
+        .finish()
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);

@@ -57,10 +57,7 @@ async fn openai_completions_sends_tool_definitions() {
         ..Default::default()
     };
 
-    provider
-        .stream(&model, &context, &options)
-        .final_message()
-        .await;
+    provider.stream(&model, &context, &options).finish().await;
 }
 
 #[tokio::test]
@@ -88,8 +85,5 @@ async fn anthropic_messages_sends_tool_definitions() {
         ..Default::default()
     };
 
-    provider
-        .stream(&model, &context, &options)
-        .final_message()
-        .await;
+    provider.stream(&model, &context, &options).finish().await;
 }
