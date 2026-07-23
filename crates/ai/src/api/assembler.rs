@@ -78,6 +78,23 @@ impl MessageAssembler {
         .expect("ProtocolEvent::Failure always produces a terminal event")
     }
 
+    /// Abort the assembly on caller-requested cancellation and return the
+    /// terminal `Error` event directly — like [`Self::fail`], but with
+    /// `stop_reason: Aborted` instead of `Error` and no `error_kind` (a
+    /// cancellation isn't a provider/transport failure classification). Any
+    /// content already accumulated (including a block still open when
+    /// cancellation landed) travels on the final message as-is; open blocks
+    /// are not synthetically ended.
+    pub(crate) fn abort(&mut self, message: impl Into<String>) -> AssistantMessageEvent {
+        self.stopped = true;
+        self.message.stop_reason = StopReason::Aborted;
+        self.message.error_message = Some(message.into());
+        AssistantMessageEvent::Error {
+            reason: StopReason::Aborted,
+            error: self.message.clone(),
+        }
+    }
+
     /// Apply one event, returning the public event to emit (if any).
     ///
     /// A `Some(AssistantMessageEvent::Error { .. })` result is always terminal

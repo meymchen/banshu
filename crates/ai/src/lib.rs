@@ -19,6 +19,7 @@ pub mod api;
 pub mod provider;
 
 mod auth;
+mod cancel;
 mod discovery;
 mod error;
 mod executor;
@@ -38,4 +39,7 @@ pub use options::{CacheRetention, StreamOptions};
 pub use provider::{AnthropicCompat, OpenAiCompat, OpenAiPromptCaching, Provider};
 pub use registry::Models;
 pub use stream::{AssistantMessageEvent, MessageStream};
+/// Re-exported so callers can construct a [`StreamOptions::cancellation`]
+/// token without adding their own `tokio-util` dependency.
+pub use tokio_util::sync::CancellationToken;
 pub use types::*;

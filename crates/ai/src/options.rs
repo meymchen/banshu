@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 /// Requested lifetime for provider-managed prompt caches.
 ///
 /// Providers that cache prompts automatically may ignore this option.
@@ -38,4 +40,10 @@ pub struct StreamOptions {
     /// wait before the executor gives up and fails as `RateLimited` instead of
     /// sleeping. `None` uses the default of 60 seconds.
     pub max_retry_delay: Option<Duration>,
+    /// Cancels the request when triggered. Covers the auth-resolver wait, HTTP
+    /// connect and response-header wait, retry backoff sleeps, and SSE body
+    /// reads. A cancelled stream terminates with `Error { reason: Aborted }`,
+    /// preserving whatever content had already streamed; no further retries
+    /// are attempted.
+    pub cancellation: Option<CancellationToken>,
 }
