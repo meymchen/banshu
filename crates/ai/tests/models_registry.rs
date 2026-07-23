@@ -1,6 +1,6 @@
 //! Seam 3: the `Models` registry — lookup, auth-gated availability, dispatch.
 
-use banshu_ai::{ApiKind, Context, Model, Models, Provider, StopReason, StreamOptions};
+use banshu_ai::{ApiKind, Auth, Context, Model, Models, Provider, StopReason, StreamOptions};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -36,6 +36,22 @@ fn available_reflects_env_configured_providers() {
     let available = models.available();
     assert!(available.iter().any(|m| m.provider == "deepseek"));
     assert!(available.iter().all(|m| m.provider != "kimi"));
+}
+
+#[test]
+fn keyless_provider_is_available_without_a_key() {
+    // A unique, unset var keeps this independent of the sibling env test.
+    let var = "BANSHU_REGISTRY_KEYLESS_UNSET";
+    unsafe { std::env::remove_var(var) };
+
+    // With env-var auth and no key set, the provider is gated out...
+    let env_gated = Provider::openai_compatible("local", "Local", "http://localhost", [var]);
+    assert!(!env_gated.is_available());
+
+    // ...but a keyless endpoint needs no credentials, so it is always available.
+    let keyless = Provider::openai_compatible("local", "Local", "http://localhost", [var])
+        .with_auth(Auth::keyless());
+    assert!(keyless.is_available());
 }
 
 const SSE_BODY: &str = concat!(

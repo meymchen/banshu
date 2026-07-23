@@ -15,6 +15,7 @@ schemars = ["dep:schemars"]
 
 [dependencies]
 async-stream = "0.3"
+async-trait = "0.1"
 bytes = "1"
 fastrand = "2"
 futures-core = "0.3"

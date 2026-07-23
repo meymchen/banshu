@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 use crate::api::anthropic_messages::AnthropicMessages;
 use crate::api::openai_completions::OpenAiCompletions;
 use crate::api::{ApiRequest, ChatApi};
+use crate::auth::Auth;
 use crate::discovery::{RefreshEntry, RefreshOutcome};
 use crate::http;
 use crate::options::StreamOptions;
@@ -68,7 +69,7 @@ pub struct Provider {
     id: String,
     name: String,
     base_url: String,
-    api_key_env: Vec<String>,
+    auth: Auth,
     api_kind: ApiKind,
     api: Arc<dyn ChatApi>,
     http: reqwest::Client,
@@ -93,7 +94,7 @@ impl Provider {
             id: id.into(),
             name: name.into(),
             base_url: base_url.into(),
-            api_key_env: api_key_env.into_iter().map(Into::into).collect(),
+            auth: Auth::api_key_env(api_key_env),
             api_kind: ApiKind::OpenAiCompletions,
             api: Arc::new(OpenAiCompletions),
             http: http::build_client(),
@@ -118,7 +119,7 @@ impl Provider {
             id: id.into(),
             name: name.into(),
             base_url: base_url.into(),
-            api_key_env: api_key_env.into_iter().map(Into::into).collect(),
+            auth: Auth::api_key_env(api_key_env),
             api_kind: ApiKind::AnthropicMessages,
             api: Arc::new(AnthropicMessages),
             http: http::build_client(),
@@ -146,6 +147,16 @@ impl Provider {
     /// Configure the endpoint quirks of this Anthropic-compatible provider.
     pub fn with_anthropic_compat(mut self, compat: AnthropicCompat) -> Self {
         self.anthropic_compat = compat;
+        self
+    }
+
+    /// Replace how this provider resolves credentials. Use
+    /// [`Auth::keyless`](crate::Auth::keyless) for a local server that needs no
+    /// key, or [`Auth::custom`](crate::Auth::custom) for a bespoke resolver.
+    /// The generic constructors default to
+    /// [`Auth::api_key_env`](crate::Auth::api_key_env).
+    pub fn with_auth(mut self, auth: Auth) -> Self {
+        self.auth = auth;
         self
     }
 
@@ -409,9 +420,12 @@ impl Provider {
         &self.http
     }
 
-    /// Whether a key is resolvable from configured environment variables.
-    pub fn has_env_api_key(&self) -> bool {
-        self.env_api_key().is_some()
+    /// Whether this provider looks usable without further configuration:
+    /// keyless providers always are, an api-key-env provider is when one of its
+    /// variables is set. A custom-resolver provider reports `false` here
+    /// because its resolver can only be consulted asynchronously.
+    pub fn is_available(&self) -> bool {
+        self.auth.is_available()
     }
 
     /// Stream a completion for `model`. Never fails synchronously — see
@@ -422,22 +436,22 @@ impl Provider {
         context: &Context,
         options: &StreamOptions,
     ) -> MessageStream {
-        let api_key = options.api_key.clone().or_else(|| self.env_api_key());
         self.api.stream(ApiRequest {
             model,
             context,
             options,
-            api_key,
+            auth: self.auth.clone(),
             http: self.http.clone(),
             openai_compat: self.openai_compat,
             anthropic_compat: self.anthropic_compat,
         })
     }
 
-    /// Resolve an API key from the configured environment variables, in order.
+    /// Best-effort synchronous key lookup from the configured environment
+    /// variables. Only [`Auth::api_key_env`] resolves synchronously; keyless
+    /// and custom resolvers report `None` here (availability gating and the
+    /// list-models probe both treat that as "no key").
     fn env_api_key(&self) -> Option<String> {
-        self.api_key_env
-            .iter()
-            .find_map(|name| std::env::var(name).ok())
+        self.auth.env_api_key()
     }
 }
