@@ -10,6 +10,7 @@ pub mod openai_completions;
 mod assembler;
 mod protocol_event;
 
+use crate::auth::Auth;
 use crate::options::StreamOptions;
 use crate::provider::{AnthropicCompat, OpenAiCompat};
 use crate::stream::MessageStream;
@@ -26,8 +27,10 @@ pub struct ApiRequest<'a> {
     pub context: &'a Context,
     /// Per-request options.
     pub options: &'a StreamOptions,
-    /// Resolved API key, if any. `None` becomes an in-band error event.
-    pub api_key: Option<String>,
+    /// How to resolve credentials. Resolution runs in-band inside the adapter's
+    /// stream; a failure becomes a terminal [`ErrorKind::Auth`](crate::ErrorKind::Auth)
+    /// event. An explicit [`StreamOptions::api_key`] takes priority over it.
+    pub auth: Auth,
     /// Shared HTTP client.
     pub http: reqwest::Client,
     /// Endpoint quirks declared by an OpenAI-compatible provider.
