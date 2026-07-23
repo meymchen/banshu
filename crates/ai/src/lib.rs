@@ -18,6 +18,7 @@
 pub mod api;
 pub mod provider;
 
+mod auth;
 mod discovery;
 mod error;
 mod executor;
@@ -29,6 +30,8 @@ mod sse;
 mod stream;
 mod types;
 
+pub use async_trait::async_trait;
+pub use auth::{Auth, AuthResolver, ProviderHeaders, ResolvedAuth};
 pub use discovery::{RefreshEntry, RefreshOutcome, RefreshReport};
 pub use error::{Error, ErrorKind, Result};
 pub use options::{CacheRetention, StreamOptions};

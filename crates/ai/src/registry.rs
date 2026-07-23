@@ -47,11 +47,13 @@ impl Models {
         self.providers.iter().flat_map(Provider::models).collect()
     }
 
-    /// Models whose provider has a resolvable API key (from options env vars).
+    /// Models whose provider looks usable without further configuration — a set
+    /// env-var key, or a keyless endpoint. Custom-resolver providers are
+    /// excluded here (their resolver is only consultable asynchronously).
     pub fn available(&self) -> Vec<Model> {
         self.providers
             .iter()
-            .filter(|p| p.has_env_api_key())
+            .filter(|p| p.is_available())
             .flat_map(Provider::models)
             .collect()
     }

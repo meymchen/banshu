@@ -37,11 +37,9 @@ impl ChatApi for OpenAiCompletions {
             request.options,
             request.openai_compat,
         );
-        let url = format!(
-            "{}/chat/completions",
-            request.model.base_url.trim_end_matches('/')
-        );
-        let api_key = request.api_key.clone();
+        let base_url = request.model.base_url.clone();
+        let auth = request.auth.clone();
+        let explicit_key = request.options.api_key.clone();
         let http = request.http.clone();
         let model_id = request.model.id.clone();
         let provider = request.model.provider.clone();
@@ -63,17 +61,32 @@ impl ChatApi for OpenAiCompletions {
             let mut assembler = MessageAssembler::new(AssistantMessage::streaming(&model_id, &provider, API_NAME));
             yield AssistantMessageEvent::Start;
 
-            let Some(api_key) = api_key else {
-                yield assembler.fail(crate::ErrorKind::Api, "no API key configured", Vec::new());
-                return;
+            let resolved = match crate::auth::resolve_for_request(&auth, explicit_key).await {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    yield assembler.fail(crate::ErrorKind::Auth, err.to_string(), Vec::new());
+                    return;
+                }
             };
+            let base = resolved.base_url.as_deref().unwrap_or(&base_url);
+            let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+            let api_key = resolved.api_key;
+            let extra_headers = resolved.headers;
 
             let session_headers = (prompt_caching == OpenAiPromptCaching::SessionAffinityHeaders
                 && cache_retention != CacheRetention::Disabled)
                 .then_some(session_id)
                 .flatten();
             let factory = move || {
-                let mut builder = http.post(&url).bearer_auth(&api_key).json(&body);
+                let mut builder = http.post(&url).json(&body);
+                if let Some(api_key) = &api_key {
+                    builder = builder.bearer_auth(api_key);
+                }
+                for (name, value) in &extra_headers {
+                    if let Some(value) = value {
+                        builder = builder.header(name, value);
+                    }
+                }
                 if let Some(session_id) = &session_headers {
                     builder = builder
                         .header("session_id", session_id)

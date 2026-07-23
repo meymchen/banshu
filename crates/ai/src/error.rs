@@ -22,6 +22,12 @@ pub enum Error {
         model: String,
     },
 
+    /// An [`AuthResolver`](crate::AuthResolver) failed to produce credentials.
+    /// Surfaces in-band as a terminal [`ErrorKind::Auth`] error event, not as a
+    /// synchronous `Result` from [`stream`](crate::Provider::stream).
+    #[error("authentication failed: {0}")]
+    Auth(String),
+
     /// An underlying HTTP/transport error at request-construction time.
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
