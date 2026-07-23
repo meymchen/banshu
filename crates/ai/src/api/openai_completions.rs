@@ -12,6 +12,7 @@ use super::assembler::{MessageAssembler, is_terminal};
 use super::protocol_event::ProtocolEvent;
 use super::{ApiRequest, ChatApi, compute_cost};
 use crate::CacheRetention;
+use crate::cancel;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::provider::{OpenAiCompat, OpenAiPromptCaching};
@@ -50,6 +51,7 @@ impl ChatApi for OpenAiCompletions {
             .max_retries
             .unwrap_or(http::DEFAULT_MAX_RETRIES);
         let max_retry_delay = request.options.max_retry_delay;
+        let cancellation = request.options.cancellation.clone();
         let cache_retention = request
             .options
             .cache_retention
@@ -61,10 +63,19 @@ impl ChatApi for OpenAiCompletions {
             let mut assembler = MessageAssembler::new(AssistantMessage::streaming(&model_id, &provider, API_NAME));
             yield AssistantMessageEvent::Start;
 
-            let resolved = match crate::auth::resolve_for_request(&auth, explicit_key).await {
-                Ok(resolved) => resolved,
-                Err(err) => {
+            let resolved = match cancel::race(
+                cancellation.as_ref(),
+                crate::auth::resolve_for_request(&auth, explicit_key),
+            )
+            .await
+            {
+                Ok(Ok(resolved)) => resolved,
+                Ok(Err(err)) => {
                     yield assembler.fail(crate::ErrorKind::Auth, err.to_string(), Vec::new());
+                    return;
+                }
+                Err(cancel::Aborted) => {
+                    yield assembler.abort("request was cancelled");
                     return;
                 }
             };
@@ -112,7 +123,7 @@ impl ChatApi for OpenAiCompletions {
             // dropped connection, not a completed response.
             let mut terminated_formally = false;
 
-            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay));
+            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay, cancellation));
             'outer: while let Some(exec_event) = exec.next().await {
                 let data = match exec_event {
                     ExecutorEvent::Retry { attempt, max_attempts, delay, kind } => {
@@ -128,6 +139,10 @@ impl ChatApi for OpenAiCompletions {
                     ExecutorEvent::Eof => break 'outer,
                     ExecutorEvent::Failed { kind, message: detail, diagnostics } => {
                         yield assembler.fail(kind, detail, diagnostics);
+                        return;
+                    }
+                    ExecutorEvent::Aborted => {
+                        yield assembler.abort("request was cancelled");
                         return;
                     }
                     ExecutorEvent::Event(sse_event) => sse_event.data,
