@@ -1,103 +1,72 @@
 //! The OpenAI `chat/completions` streaming protocol.
 //!
 //! Every provider in banshu that isn't Anthropic-compatible speaks this. The
-//! implementation builds the request body synchronously from borrowed context,
-//! then streams SSE, mapping deltas into banshu events and assembling the final
-//! [`AssistantMessage`].
+//! implementation builds the request body from the resolved
+//! [`PreparedRequest`], then streams SSE, translating wire deltas into
+//! [`ProtocolEvent`]s. Assembly into public events and the final message is
+//! the driver's job (see [`crate::api`]).
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::assembler::{MessageAssembler, is_terminal};
 use super::protocol_event::ProtocolEvent;
-use super::{ApiRequest, ChatApi, compute_cost};
+use super::{PreparedRequest, ProtocolAdapter, ProtocolEventStream, compute_cost};
 use crate::CacheRetention;
-use crate::cancel;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::provider::{OpenAiCompat, OpenAiPromptCaching};
-use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
-    AssistantContent, AssistantMessage, Context, Diagnostic, DiagnosticCode, Message, Model,
-    StopReason, ThinkingContent, Usage,
+    ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model, StopReason,
+    ThinkingContent, Usage,
 };
 
 /// The OpenAI-completions wire protocol.
 pub struct OpenAiCompletions;
 
-const API_NAME: &str = "openai-completions";
 const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH: usize = 64;
 
-impl ChatApi for OpenAiCompletions {
-    fn stream(&self, request: ApiRequest<'_>) -> MessageStream {
-        // Extract everything the async body needs as owned values up front, so
-        // the returned stream is `'static`.
-        let body = build_request_body(
-            request.model,
-            request.context,
-            request.options,
-            request.openai_compat,
-        );
-        let base_url = request.model.base_url.clone();
-        let auth = request.auth.clone();
-        let explicit_key = request.options.api_key.clone();
-        let http = request.http.clone();
-        let model_id = request.model.id.clone();
-        let provider = request.model.provider.clone();
-        let cost = request.model.cost.clone();
-        let timeout = request.options.timeout;
-        let max_retries = request
-            .options
-            .max_retries
-            .unwrap_or(http::DEFAULT_MAX_RETRIES);
-        let max_retry_delay = request.options.max_retry_delay;
-        let cancellation = request.options.cancellation.clone();
-        let cache_retention = request
-            .options
-            .cache_retention
-            .unwrap_or(CacheRetention::Short);
-        let session_id = request.options.session_id.clone();
-        let prompt_caching = request.openai_compat.prompt_caching;
+impl ProtocolAdapter for OpenAiCompletions {
+    fn kind(&self) -> ApiKind {
+        ApiKind::OpenAiCompletions
+    }
+
+    fn stream(&self, request: PreparedRequest) -> ProtocolEventStream {
+        let PreparedRequest {
+            model,
+            context,
+            options,
+            auth,
+            headers,
+            http,
+            openai_compat,
+            ..
+        } = request;
+        let body = build_request_body(&model, &context, &options, openai_compat);
+        let base_url = model.base_url.clone();
+        let cost = model.cost.clone();
+        let timeout = options.timeout;
+        let max_retries = options.max_retries.unwrap_or(http::DEFAULT_MAX_RETRIES);
+        let max_retry_delay = options.max_retry_delay;
+        let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
+        let session_id = options.session_id.clone();
+        let prompt_caching = openai_compat.prompt_caching;
 
         let stream = async_stream::stream! {
-            let mut assembler = MessageAssembler::new(AssistantMessage::streaming(&model_id, &provider, API_NAME));
-            yield AssistantMessageEvent::Start;
-
-            let resolved = match cancel::race(
-                cancellation.as_ref(),
-                crate::auth::resolve_for_request(&auth, explicit_key),
-            )
-            .await
-            {
-                Ok(Ok(resolved)) => resolved,
-                Ok(Err(err)) => {
-                    yield assembler.fail(crate::ErrorKind::Auth, err.to_string(), Vec::new());
-                    return;
-                }
-                Err(cancel::Aborted) => {
-                    yield assembler.abort("request was cancelled");
-                    return;
-                }
-            };
-            let base = resolved.base_url.as_deref().unwrap_or(&base_url);
+            let base = auth.base_url.as_deref().unwrap_or(&base_url);
             let url = format!("{}/chat/completions", base.trim_end_matches('/'));
-            let api_key = resolved.api_key;
-            let extra_headers = resolved.headers;
+            let api_key = auth.api_key;
+            let auth_headers = auth.headers;
 
             let session_headers = (prompt_caching == OpenAiPromptCaching::SessionAffinityHeaders
                 && cache_retention != CacheRetention::Disabled)
                 .then_some(session_id)
                 .flatten();
             let factory = move || {
-                let mut builder = http.post(&url).json(&body);
+                let mut builder = super::apply_headers(http.post(&url).json(&body), &headers);
                 if let Some(api_key) = &api_key {
                     builder = builder.bearer_auth(api_key);
                 }
-                for (name, value) in &extra_headers {
-                    if let Some(value) = value {
-                        builder = builder.header(name, value);
-                    }
-                }
+                builder = super::apply_headers(builder, &auth_headers);
                 if let Some(session_id) = &session_headers {
                     builder = builder
                         .header("session_id", session_id)
@@ -123,26 +92,20 @@ impl ChatApi for OpenAiCompletions {
             // dropped connection, not a completed response.
             let mut terminated_formally = false;
 
-            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay, cancellation));
+            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay));
             'outer: while let Some(exec_event) = exec.next().await {
                 let data = match exec_event {
                     ExecutorEvent::Retry { attempt, max_attempts, delay, kind } => {
-                        if let Some(event) = assembler.apply(ProtocolEvent::Retry { attempt, max_attempts, delay, kind }) {
-                            yield event;
-                        }
+                        yield ProtocolEvent::Retry { attempt, max_attempts, delay, kind };
                         continue;
                     }
                     ExecutorEvent::Established { request_id } => {
-                        let _ = assembler.apply(ProtocolEvent::ResponseMetadata { response_id: request_id, response_model: None });
+                        yield ProtocolEvent::ResponseMetadata { response_id: request_id, response_model: None };
                         continue;
                     }
                     ExecutorEvent::Eof => break 'outer,
-                    ExecutorEvent::Failed { kind, message: detail, diagnostics } => {
-                        yield assembler.fail(kind, detail, diagnostics);
-                        return;
-                    }
-                    ExecutorEvent::Aborted => {
-                        yield assembler.abort("request was cancelled");
+                    ExecutorEvent::Failed { kind, message, diagnostics } => {
+                        yield ProtocolEvent::Failure { kind, message, diagnostics };
                         return;
                     }
                     ExecutorEvent::Event(sse_event) => sse_event.data,
@@ -153,25 +116,33 @@ impl ChatApi for OpenAiCompletions {
                 }
                 let value = match super::parse_sse_json(data) {
                     Ok(value) => value,
-                    Err((detail, diagnostic)) => {
-                        yield assembler.fail(crate::ErrorKind::Protocol, detail, vec![diagnostic]);
+                    Err((message, diagnostic)) => {
+                        yield ProtocolEvent::Failure {
+                            kind: crate::ErrorKind::Protocol,
+                            message,
+                            diagnostics: vec![diagnostic],
+                        };
                         return;
                     }
                 };
                 if value.get("error").is_some() {
-                    let detail = http::json_error_summary(&value)
+                    let message = http::json_error_summary(&value)
                         .unwrap_or_else(|| "provider returned an error".to_string());
-                    yield assembler.fail(crate::ErrorKind::Api, detail, Vec::new());
+                    yield ProtocolEvent::Failure {
+                        kind: crate::ErrorKind::Api,
+                        message,
+                        diagnostics: Vec::new(),
+                    };
                     return;
                 }
                 let parsed = match serde_json::from_value::<ChatChunk>(value.clone()) {
                     Ok(parsed) => parsed,
                     Err(_) => {
-                        yield assembler.fail(
-                            crate::ErrorKind::Protocol,
-                            "unrecognized SSE chunk shape",
-                            vec![Diagnostic::new(DiagnosticCode::ProtocolViolation, value.to_string())],
-                        );
+                        yield ProtocolEvent::Failure {
+                            kind: crate::ErrorKind::Protocol,
+                            message: "unrecognized SSE chunk shape".to_string(),
+                            diagnostics: vec![Diagnostic::new(DiagnosticCode::ProtocolViolation, value.to_string())],
+                        };
                         return;
                     }
                 };
@@ -203,23 +174,15 @@ impl ChatApi for OpenAiCompletions {
                                 let id = next_block_id;
                                 next_block_id += 1;
                                 thinking_block_id = Some(id);
-                                if let Some(event) = assembler.apply(ProtocolEvent::ThinkingStart {
+                                yield ProtocolEvent::ThinkingStart {
                                     block_id: id,
                                     signature: Some(field.to_string()),
                                     redacted: false,
-                                }) {
-                                    let terminal = is_terminal(&event);
-                                    yield event;
-                                    if terminal { return; }
-                                }
+                                };
                                 id
                             }
                         };
-                        if let Some(event) = assembler.apply(ProtocolEvent::ThinkingDelta { block_id, delta: reasoning }) {
-                            let terminal = is_terminal(&event);
-                            yield event;
-                            if terminal { return; }
-                        }
+                        yield ProtocolEvent::ThinkingDelta { block_id, delta: reasoning };
                     }
                     if let Some(delta) = choice.delta.content
                         && !delta.is_empty()
@@ -230,19 +193,11 @@ impl ChatApi for OpenAiCompletions {
                                 let id = next_block_id;
                                 next_block_id += 1;
                                 text_block_id = Some(id);
-                                if let Some(event) = assembler.apply(ProtocolEvent::TextStart { block_id: id, signature: None }) {
-                                    let terminal = is_terminal(&event);
-                                    yield event;
-                                    if terminal { return; }
-                                }
+                                yield ProtocolEvent::TextStart { block_id: id, signature: None };
                                 id
                             }
                         };
-                        if let Some(event) = assembler.apply(ProtocolEvent::TextDelta { block_id, delta }) {
-                            let terminal = is_terminal(&event);
-                            yield event;
-                            if terminal { return; }
-                        }
+                        yield ProtocolEvent::TextDelta { block_id, delta };
                     }
                     for delta in choice.delta.tool_calls {
                         let slot = delta.index;
@@ -270,67 +225,41 @@ impl ChatApi for OpenAiCompletions {
             }
 
             if !terminated_formally {
-                yield assembler.fail(
-                    crate::ErrorKind::StreamInterrupted,
-                    "connection closed before a completion signal ([DONE] or finish_reason)",
-                    Vec::new(),
-                );
+                yield ProtocolEvent::Failure {
+                    kind: crate::ErrorKind::StreamInterrupted,
+                    message: "connection closed before a completion signal ([DONE] or finish_reason)".to_string(),
+                    diagnostics: Vec::new(),
+                };
                 return;
             }
 
-            // Each `*End` now emits a public `TextEnd`/`ThinkingEnd` event
-            // carrying the finished content; a protocol violation (unknown/
-            // already-ended/mismatched block) instead comes back as a terminal
-            // `Error`, so every site checks `is_terminal` before continuing.
-            if let Some(block_id) = thinking_block_id
-                && let Some(event) = assembler.apply(ProtocolEvent::ThinkingEnd { block_id })
-            {
-                let terminal = is_terminal(&event);
-                yield event;
-                if terminal { return; }
+            // Close whatever blocks the wire left open, then report usage and
+            // the formal stop. v0.3 collapses a tool call's fragments into one
+            // Start+Delta+End each, emitted at completion rather than per wire
+            // delta.
+            if let Some(block_id) = thinking_block_id {
+                yield ProtocolEvent::ThinkingEnd { block_id };
             }
-            if let Some(block_id) = text_block_id
-                && let Some(event) = assembler.apply(ProtocolEvent::TextEnd { block_id })
-            {
-                let terminal = is_terminal(&event);
-                yield event;
-                if terminal { return; }
+            if let Some(block_id) = text_block_id {
+                yield ProtocolEvent::TextEnd { block_id };
             }
-
-            // v0.3 collapses a tool call's fragments into one Start+Delta+End
-            // each, emitted at completion rather than per wire delta.
             for accum in tools {
                 if accum.is_empty() {
                     continue;
                 }
                 let block_id = next_block_id;
                 next_block_id += 1;
-                if let Some(event) = assembler.apply(ProtocolEvent::ToolCallStart { block_id, id: accum.id, name: accum.name }) {
-                    let terminal = is_terminal(&event);
-                    yield event;
-                    if terminal { return; }
-                }
-                if let Some(event) = assembler.apply(ProtocolEvent::ToolCallDelta { block_id, delta: accum.arguments }) {
-                    let terminal = is_terminal(&event);
-                    yield event;
-                    if terminal { return; }
-                }
-                if let Some(event) = assembler.apply(ProtocolEvent::ToolCallEnd { block_id }) {
-                    let terminal = is_terminal(&event);
-                    yield event;
-                    if terminal { return; }
-                }
+                yield ProtocolEvent::ToolCallStart { block_id, id: accum.id, name: accum.name };
+                yield ProtocolEvent::ToolCallDelta { block_id, delta: accum.arguments };
+                yield ProtocolEvent::ToolCallEnd { block_id };
             }
 
             usage.cost = compute_cost(&usage, &cost);
-            let _ = assembler.apply(ProtocolEvent::Usage(usage));
-            let _ = assembler.apply(ProtocolEvent::Stop(stop_reason));
-
-            let message = assembler.into_message();
-            yield AssistantMessageEvent::Done { reason: stop_reason, message };
+            yield ProtocolEvent::Usage(usage);
+            yield ProtocolEvent::Stop(stop_reason);
         };
 
-        MessageStream::new(stream)
+        Box::pin(stream)
     }
 }
 

@@ -1,6 +1,8 @@
-//! Cooperative cancellation, shared by [`crate::executor`] and both protocol
-//! adapters, wired to
-//! [`StreamOptions::cancellation`](crate::StreamOptions::cancellation).
+//! Cooperative cancellation, wired to
+//! [`StreamOptions::cancellation`](crate::StreamOptions::cancellation) and
+//! raced by the stream driver (`crate::api`) against the auth-resolver wait
+//! and every adapter await point — cancelling drops the adapter stream, which
+//! cancels the in-flight connect, backoff sleep, or SSE read.
 //!
 //! Built on `futures_util::future::select` rather than `tokio::select!` so
 //! this crate doesn't need tokio's `macros` feature just for this.

@@ -4,19 +4,20 @@
 //! attempt, so request bodies never need to be cloneable) and drives the
 //! returned stream: [`ExecutorEvent::Retry`] to report progress,
 //! [`ExecutorEvent::Event`] for each decoded SSE event, [`ExecutorEvent::Eof`]
-//! when the body closes normally, [`ExecutorEvent::Failed`] as the sole
+//! when the body closes normally, and [`ExecutorEvent::Failed`] as the sole
 //! terminal failure shape covering pre-stream retryable-budget exhaustion, a
 //! Retry-After beyond the configured cap, a mid-stream transport drop, and an
-//! oversized SSE event, and [`ExecutorEvent::Aborted`] when the caller's
-//! [`CancellationToken`] fires during connect, retry backoff, or an SSE read.
+//! oversized SSE event.
+//!
+//! Cancellation is not handled here: the driver that owns this stream races
+//! the caller's token against it and drops it on cancel, which cancels
+//! whatever await (connect, backoff sleep, SSE read) is in flight.
 
 use std::time::Duration;
 
 use futures_core::Stream;
 use futures_util::StreamExt;
-use tokio_util::sync::CancellationToken;
 
-use crate::cancel;
 use crate::error::ErrorKind;
 use crate::http::{self, RetryDecision};
 use crate::sse::{SseDecoder, SseError, SseEvent};
@@ -54,9 +55,6 @@ pub(crate) enum ExecutorEvent {
         /// Bounded, redacted detail for `AssistantMessage.diagnostics`.
         diagnostics: Vec<Diagnostic>,
     },
-    /// The caller's [`CancellationToken`] fired before the request finished.
-    /// No further retries follow this event.
-    Aborted,
 }
 
 /// Execute one request with bounded pre-stream retry, then decode its SSE
@@ -68,21 +66,12 @@ pub(crate) fn execute(
     factory: impl Fn() -> reqwest::RequestBuilder + Send + 'static,
     max_retries: u32,
     max_retry_delay: Option<Duration>,
-    cancellation: Option<CancellationToken>,
 ) -> impl Stream<Item = ExecutorEvent> {
     async_stream::stream! {
         let max_retry_delay = max_retry_delay.unwrap_or(http::DEFAULT_MAX_RETRY_DELAY);
-        let token = cancellation.as_ref();
         let mut attempt: u32 = 0;
         let response = loop {
-            let attempt_result = match cancel::race(token, http::send_once(factory())).await {
-                Ok(result) => result,
-                Err(cancel::Aborted) => {
-                    yield ExecutorEvent::Aborted;
-                    return;
-                }
-            };
-            match attempt_result {
+            match http::send_once(factory()).await {
                 Ok(response) => break response,
                 Err(failure) if failure.kind.is_retryable() && attempt < max_retries => {
                     attempt += 1;
@@ -94,10 +83,7 @@ pub(crate) fn execute(
                                 delay,
                                 kind: failure.kind,
                             };
-                            if cancel::race(token, tokio::time::sleep(delay)).await.is_err() {
-                                yield ExecutorEvent::Aborted;
-                                return;
-                            }
+                            tokio::time::sleep(delay).await;
                         }
                         RetryDecision::ExceedsCap { requested } => {
                             yield ExecutorEvent::Failed {
@@ -134,14 +120,7 @@ pub(crate) fn execute(
         let mut decoder = SseDecoder::new();
         let mut body = response.bytes_stream();
         loop {
-            let next = match cancel::race(token, body.next()).await {
-                Ok(next) => next,
-                Err(cancel::Aborted) => {
-                    yield ExecutorEvent::Aborted;
-                    return;
-                }
-            };
-            match next {
+            match body.next().await {
                 Some(Ok(chunk)) => match decoder.push(&chunk) {
                     Ok(events) => {
                         for event in events {

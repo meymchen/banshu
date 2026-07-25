@@ -1,24 +1,37 @@
-//! The internal protocol-event vocabulary a wire adapter emits, keyed by an
-//! adapter-generated opaque `block_id` that ties together every event for the
-//! same content block.
+//! The protocol-event vocabulary a [`ProtocolAdapter`](super::ProtocolAdapter)
+//! emits, keyed by an adapter-generated opaque `block_id` that ties together
+//! every event for the same content block.
 //!
-//! A [`ProtocolEvent`] stream sits between a protocol adapter (which only
-//! understands its own wire JSON) and [`super::assembler::MessageAssembler`]
-//! (which assigns the stable public `content_index`, enforces block ordering,
-//! and builds the assembled [`AssistantMessage`](crate::AssistantMessage)).
-//! See PRD v0.3 §5.4/§6.
+//! A [`ProtocolEventStream`] sits between a protocol adapter (which only
+//! understands its own wire JSON) and the internal message assembler (which
+//! assigns the stable public `content_index`, enforces block ordering, and
+//! builds the assembled [`AssistantMessage`](crate::AssistantMessage)). This
+//! is the minimal interface a custom adapter must learn: it carries no
+//! provider-specific wire JSON and gives no access to the public
+//! [`AssistantMessageEvent`](crate::AssistantMessageEvent)s. See PRD v0.3
+//! §5.4/§6.
 
+use std::pin::Pin;
 use std::time::Duration;
+
+use futures_core::Stream;
 
 use crate::error::ErrorKind;
 use crate::types::{Diagnostic, StopReason, Usage};
 
+/// The stream a [`ProtocolAdapter`](super::ProtocolAdapter) returns: pinned,
+/// boxed, and `'static` so it can own the request's HTTP resources.
+pub type ProtocolEventStream = Pin<Box<dyn Stream<Item = ProtocolEvent> + Send + 'static>>;
+
 /// One incremental event from a protocol adapter.
 ///
-/// Every event after a block's `*Start` reuses that block's `block_id`.
+/// Every event after a block's `*Start` reuses that block's `block_id`. A
+/// well-formed stream ends with exactly one [`Stop`](Self::Stop) or
+/// [`Failure`](Self::Failure); ending the stream without either is a protocol
+/// violation the driver reports as [`ErrorKind::Protocol`].
 #[non_exhaustive]
 #[derive(Debug, Clone)]
-pub(crate) enum ProtocolEvent {
+pub enum ProtocolEvent {
     /// The first event for a text block.
     TextStart {
         /// Opaque id shared by every event for this block.
@@ -54,12 +67,8 @@ pub(crate) enum ProtocolEvent {
         /// The appended reasoning text.
         delta: String,
     },
-    /// A signature arriving separately from the thinking text itself.
-    ///
-    /// Not yet constructed: the OpenAI adapter captures its thinking
-    /// signature at `ThinkingStart`, and no adapter emits this variant until
-    /// the Anthropic migration (`signature_delta`) lands.
-    #[allow(dead_code)]
+    /// A signature arriving separately from the thinking text itself
+    /// (Anthropic's `signature_delta`).
     ThinkingSignature {
         /// Which block this signature belongs to.
         block_id: u64,

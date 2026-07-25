@@ -1,15 +1,15 @@
-//! The `Models` registry — a collection of providers with lookup, auth-gated
-//! availability, and dispatch. This is the ergonomic surface a consumer reaches
-//! for: register providers once, then resolve and stream models by id without
-//! caring which provider owns them.
+//! The `Models` registry — an id-keyed collection of providers with lookup,
+//! auth-gated availability, and dispatch. This is the ergonomic surface a
+//! consumer reaches for: register providers once, then resolve and stream
+//! models by id without caring which provider owns them.
 
 use crate::discovery::{self, RefreshOutcome, RefreshReport};
 use crate::options::StreamOptions;
 use crate::provider::Provider;
 use crate::stream::MessageStream;
-use crate::types::{Context, Model};
+use crate::types::{AssistantMessage, Context, Model};
 
-/// A runtime collection of [`Provider`]s.
+/// A runtime collection of [`Provider`]s, keyed by provider id.
 #[derive(Default)]
 pub struct Models {
     providers: Vec<Provider>,
@@ -21,15 +21,24 @@ impl Models {
         Self::default()
     }
 
-    /// Add a provider (builder style).
+    /// Add a provider (builder style); see [`set_provider`](Self::set_provider).
     pub fn with_provider(mut self, provider: Provider) -> Self {
-        self.providers.push(provider);
+        self.set_provider(provider);
         self
     }
 
-    /// Add a provider in place.
-    pub fn register(&mut self, provider: Provider) {
-        self.providers.push(provider);
+    /// Add a provider, replacing any existing provider with the same id.
+    pub fn set_provider(&mut self, provider: Provider) {
+        match self.providers.iter_mut().find(|p| p.id() == provider.id()) {
+            Some(slot) => *slot = provider,
+            None => self.providers.push(provider),
+        }
+    }
+
+    /// Remove and return the provider with this id, if registered.
+    pub fn remove_provider(&mut self, id: &str) -> Option<Provider> {
+        let index = self.providers.iter().position(|p| p.id() == id)?;
+        Some(self.providers.remove(index))
     }
 
     /// All registered providers.
@@ -47,14 +56,19 @@ impl Models {
         self.providers.iter().flat_map(Provider::models).collect()
     }
 
-    /// Models whose provider looks usable without further configuration — a set
-    /// env-var key, or a keyless endpoint. Custom-resolver providers are
-    /// excluded here (their resolver is only consultable asynchronously).
-    pub fn available(&self) -> Vec<Model> {
+    /// Models whose provider is currently usable — a set env-var key, a
+    /// keyless endpoint, or a custom resolver whose `check` passes. Async
+    /// because a custom [`AuthResolver`](crate::AuthResolver) may need real
+    /// I/O to answer; a resolver error reads as unavailable.
+    pub async fn available(&self) -> Vec<Model> {
+        let checks =
+            futures_util::future::join_all(self.providers.iter().map(Provider::check_available))
+                .await;
         self.providers
             .iter()
-            .filter(|p| p.is_available())
-            .flat_map(Provider::models)
+            .zip(checks)
+            .filter(|(_, available)| *available)
+            .flat_map(|(provider, _)| provider.models())
             .collect()
     }
 
@@ -117,5 +131,19 @@ impl Models {
                 &format!("no registered provider owns model `{}`", model.id),
             ),
         }
+    }
+
+    /// Stream a completion to the end and return the final message.
+    ///
+    /// Like [`stream`](Self::stream), failures are in-band: inspect
+    /// `stop_reason`/`error_kind` on the returned message rather than
+    /// expecting a `Result`.
+    pub async fn complete(
+        &self,
+        model: &Model,
+        context: &Context,
+        options: &StreamOptions,
+    ) -> AssistantMessage {
+        self.stream(model, context, options).finish().await
     }
 }
