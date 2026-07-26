@@ -1,11 +1,11 @@
 //! The `Model` metadata type and its supporting enums.
 
-/// Which wire protocol a model speaks. Used for identification and to pick the
-/// matching [`ChatApi`](crate::api::ChatApi) implementation.
+/// Which wire protocol a model speaks. Used for identification and to route
+/// the model to the matching [`ProtocolAdapter`](crate::ProtocolAdapter).
 ///
 /// Serializes to pi-ai's stable api id strings.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ApiKind {
     /// OpenAI-style `POST /chat/completions`.
     #[serde(rename = "openai-completions")]

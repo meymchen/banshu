@@ -18,13 +18,14 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 
-/// Custom request headers contributed by an auth resolver.
+/// Custom request headers contributed by an auth resolver or a provider's
+/// defaults.
 ///
-/// A `None` value deletes a same-named header supplied by a lower-priority
-/// layer. The full priority chain (provider/model/request levels) and its
-/// case-insensitive merge land with the headers work; today the only source is
-/// [`ResolvedAuth::headers`], so a `Some` value is attached and a `None` value
-/// is a no-op.
+/// Today [`ResolvedAuth::headers`] and provider-level defaults are the only
+/// sources, attached to the request in priority order (a `None` value is a
+/// no-op). The full case-insensitive merge chain — model/request levels,
+/// same-name override, and `None`-means-delete — lands with the headers work
+/// (PRD v0.3 §5.5).
 pub type ProviderHeaders = BTreeMap<String, Option<String>>;
 
 /// Credentials and endpoint overrides produced by an [`AuthResolver`].
@@ -99,11 +100,12 @@ impl Auth {
         }
     }
 
-    /// Best-effort *synchronous* availability, for `Models::available` gating.
-    /// Keyless is always available; api-key-env is available when a listed
-    /// variable is set. A custom resolver can only answer via the async
-    /// [`AuthResolver::check`], so it reports `false` here — async availability
-    /// gating lands with the Models rework.
+    /// Best-effort *synchronous* availability, for
+    /// [`Provider::is_available`](crate::Provider::is_available). Keyless is
+    /// always available; api-key-env is available when a listed variable is
+    /// set. A custom resolver can only answer via the async
+    /// [`AuthResolver::check`], so it reports `false` here — the async
+    /// [`Models::available`](crate::Models::available) consults it instead.
     pub(crate) fn is_available(&self) -> bool {
         match self {
             Self::ApiKeyEnv(vars) => vars.iter().any(|name| std::env::var(name).is_ok()),

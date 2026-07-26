@@ -20,8 +20,8 @@ fn get_looks_up_models_by_provider_and_id() {
     assert!(models.get("unregistered", "deepseek-chat").is_none());
 }
 
-#[test]
-fn available_reflects_env_configured_providers() {
+#[tokio::test]
+async fn available_reflects_env_configured_providers() {
     // SAFETY: single-threaded test setup; we set/clear the provider env vars we
     // gate on so availability is deterministic regardless of the host env.
     unsafe {
@@ -33,9 +33,43 @@ fn available_reflects_env_configured_providers() {
         .with_provider(Provider::deepseek())
         .with_provider(Provider::kimi());
 
-    let available = models.available();
+    let available = models.available().await;
     assert!(available.iter().any(|m| m.provider == "deepseek"));
     assert!(available.iter().all(|m| m.provider != "kimi"));
+}
+
+#[test]
+fn set_provider_with_the_same_id_replaces_the_old_provider() {
+    let mut models = Models::new();
+    models.set_provider(Provider::openai_compatible(
+        "acme",
+        "Acme",
+        "http://a.invalid",
+        ["ACME_REPLACE_KEY"],
+    ));
+    models.set_provider(Provider::openai_compatible(
+        "acme",
+        "Acme Two",
+        "http://b.invalid",
+        ["ACME_REPLACE_KEY"],
+    ));
+
+    assert_eq!(models.providers().len(), 1);
+    let provider = models.provider("acme").expect("still registered");
+    assert_eq!(provider.name(), "Acme Two");
+    assert_eq!(provider.base_url(), "http://b.invalid");
+}
+
+#[test]
+fn remove_provider_takes_it_out_of_lookup_and_listing() {
+    let mut models = Models::new().with_provider(Provider::deepseek());
+    assert!(models.get("deepseek", "deepseek-chat").is_some());
+
+    let removed = models.remove_provider("deepseek").expect("was registered");
+    assert_eq!(removed.id(), "deepseek");
+    assert!(models.provider("deepseek").is_none());
+    assert!(models.get("deepseek", "deepseek-chat").is_none());
+    assert!(models.remove_provider("deepseek").is_none());
 }
 
 #[test]

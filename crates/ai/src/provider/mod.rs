@@ -1,15 +1,21 @@
-//! Providers — mostly data: id, name, base URL, env-var auth, and a handle to
-//! the wire protocol its models speak. Per-vendor constructors (DeepSeek, Z.AI,
-//! …) live in submodules and delegate to the generic constructors here.
+//! Providers: identity, models, auth, default headers, compat quirks, and the
+//! protocol adapters their models speak. Per-vendor constructors (DeepSeek,
+//! Z.AI, …) delegate to [`ProviderBuilder`]; custom providers — local servers,
+//! mixed-protocol gateways, third-party protocols — are built through
+//! [`Provider::builder`] directly.
 
+mod builder;
+
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+
+pub use builder::ProviderBuilder;
 
 use crate::api::anthropic_messages::AnthropicMessages;
 use crate::api::openai_completions::OpenAiCompletions;
-use crate::api::{ApiRequest, ChatApi};
-use crate::auth::Auth;
+use crate::api::{ProtocolAdapter, api_name};
+use crate::auth::{Auth, AuthResolver, ProviderHeaders};
 use crate::discovery::{RefreshEntry, RefreshOutcome};
-use crate::http;
 use crate::options::StreamOptions;
 use crate::stream::MessageStream;
 use crate::types::{ApiKind, Context, Model};
@@ -64,14 +70,22 @@ struct Overlay {
     probed: Vec<Model>,
 }
 
-/// A configured provider: metadata + auth + a wire-protocol handle.
+/// A configured provider: metadata + auth + the protocol adapters its models
+/// speak, at most one per [`ApiKind`].
 pub struct Provider {
     id: String,
     name: String,
     base_url: String,
     auth: Auth,
+    /// The primary protocol: the first adapter registered at build time. Used
+    /// for catalog stamping and the list-models probe of a mixed-protocol
+    /// provider; request routing always goes by `Model.api`.
     api_kind: ApiKind,
-    api: Arc<dyn ChatApi>,
+    adapters: HashMap<ApiKind, Arc<dyn ProtocolAdapter>>,
+    headers: ProviderHeaders,
+    /// Caller-supplied models from the builder, listed ahead of the bundled
+    /// catalog and discovery overlay.
+    models: Vec<Model>,
     http: reqwest::Client,
     openai_compat: OpenAiCompat,
     anthropic_compat: AnthropicCompat,
@@ -80,54 +94,58 @@ pub struct Provider {
 }
 
 impl Provider {
+    /// Start building a custom provider; see [`ProviderBuilder`] for the
+    /// invariants [`build`](ProviderBuilder::build) enforces.
+    pub fn builder(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> ProviderBuilder {
+        ProviderBuilder::new(id, name, base_url)
+    }
+
     /// Build a provider that speaks the OpenAI `chat/completions` protocol.
     ///
     /// `api_key_env` lists environment variables checked, in order, when no
     /// per-request key is supplied.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `id` is empty — a caller bug the fallible
+    /// [`Provider::builder`] reports as [`Error::Config`](crate::Error)
+    /// instead.
     pub fn openai_compatible(
         id: impl Into<String>,
         name: impl Into<String>,
         base_url: impl Into<String>,
         api_key_env: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            base_url: base_url.into(),
-            auth: Auth::api_key_env(api_key_env),
-            api_kind: ApiKind::OpenAiCompletions,
-            api: Arc::new(OpenAiCompletions),
-            http: http::build_client(),
-            openai_compat: OpenAiCompat::default(),
-            anthropic_compat: AnthropicCompat::default(),
-            models_dev_id: None,
-            overlay: RwLock::default(),
-        }
+        Self::builder(id, name, base_url)
+            .auth(Auth::api_key_env(api_key_env))
+            .adapter(Arc::new(OpenAiCompletions))
+            .build()
+            .expect("openai_compatible: valid by construction given a non-empty id")
     }
 
     /// Build a provider that speaks the Anthropic `/v1/messages` protocol.
     ///
     /// `api_key_env` lists environment variables checked, in order, when no
     /// per-request key is supplied.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `id` is empty — see [`openai_compatible`](Self::openai_compatible).
     pub fn anthropic_compatible(
         id: impl Into<String>,
         name: impl Into<String>,
         base_url: impl Into<String>,
         api_key_env: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            base_url: base_url.into(),
-            auth: Auth::api_key_env(api_key_env),
-            api_kind: ApiKind::AnthropicMessages,
-            api: Arc::new(AnthropicMessages),
-            http: http::build_client(),
-            openai_compat: OpenAiCompat::default(),
-            anthropic_compat: AnthropicCompat::default(),
-            models_dev_id: None,
-            overlay: RwLock::default(),
-        }
+        Self::builder(id, name, base_url)
+            .auth(Auth::api_key_env(api_key_env))
+            .adapter(Arc::new(AnthropicMessages))
+            .build()
+            .expect("anthropic_compatible: valid by construction given a non-empty id")
     }
 
     /// Set the models.dev provider key used by the catalog-refresh layer of
@@ -264,17 +282,23 @@ impl Provider {
         &self.base_url
     }
 
-    /// The wire protocol this provider's models speak.
+    /// The provider's primary wire protocol (the first adapter registered at
+    /// build time). Request routing goes by `Model.api`, not this.
     pub fn api_kind(&self) -> ApiKind {
         self.api_kind
     }
 
-    /// The provider's models: the bundled catalog layered under anything
-    /// dynamic discovery has found — models.dev entries override same-id
-    /// catalog entries and append new ones; probe-discovered models are
-    /// append-only.
+    /// The provider's models: caller-supplied models first, then the bundled
+    /// catalog, then anything dynamic discovery has found — models.dev entries
+    /// override same-id entries and append new ones; probe-discovered models
+    /// are append-only.
     pub fn models(&self) -> Vec<Model> {
-        let mut merged = crate::models::catalog_models(&self.id, &self.base_url, self.api_kind);
+        let mut merged = self.models.clone();
+        for model in crate::models::catalog_models(&self.id, &self.base_url, self.api_kind) {
+            if !merged.iter().any(|known| known.id == model.id) {
+                merged.push(model);
+            }
+        }
         let overlay = self.overlay.read().expect("model overlay lock poisoned");
         for model in &overlay.refreshed {
             match merged.iter_mut().find(|m| m.id == model.id) {
@@ -423,12 +447,24 @@ impl Provider {
     /// Whether this provider looks usable without further configuration:
     /// keyless providers always are, an api-key-env provider is when one of its
     /// variables is set. A custom-resolver provider reports `false` here
-    /// because its resolver can only be consulted asynchronously.
+    /// because its resolver can only be consulted asynchronously — use
+    /// [`Models::available`](crate::Models::available), which is async and
+    /// consults it, for gating.
     pub fn is_available(&self) -> bool {
         self.auth.is_available()
     }
 
-    /// Stream a completion for `model`. Never fails synchronously — see
+    /// Async availability check behind
+    /// [`Models::available`](crate::Models::available): consults the resolver,
+    /// so a custom resolver gets its say. A resolver error reads as
+    /// unavailable.
+    pub(crate) async fn check_available(&self) -> bool {
+        self.auth.check().await.unwrap_or(false)
+    }
+
+    /// Stream a completion for `model`, routed to the adapter registered for
+    /// `model.api`. Never fails synchronously — a model whose protocol this
+    /// provider has no adapter for yields an in-band error; see
     /// [`MessageStream`].
     pub fn stream(
         &self,
@@ -436,15 +472,28 @@ impl Provider {
         context: &Context,
         options: &StreamOptions,
     ) -> MessageStream {
-        self.api.stream(ApiRequest {
-            model,
-            context,
-            options,
-            auth: self.auth.clone(),
-            http: self.http.clone(),
-            openai_compat: self.openai_compat,
-            anthropic_compat: self.anthropic_compat,
-        })
+        match self.adapters.get(&model.api) {
+            Some(adapter) => crate::api::drive(
+                adapter,
+                model,
+                context,
+                options,
+                &self.auth,
+                &self.headers,
+                &self.http,
+                self.openai_compat,
+                self.anthropic_compat,
+            ),
+            None => MessageStream::immediate_error(
+                &model.id,
+                &self.id,
+                &format!(
+                    "provider `{}` has no adapter for the `{}` protocol",
+                    self.id,
+                    api_name(model.api),
+                ),
+            ),
+        }
     }
 
     /// Best-effort synchronous key lookup from the configured environment

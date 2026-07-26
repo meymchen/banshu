@@ -22,6 +22,13 @@ pub enum Error {
         model: String,
     },
 
+    /// A [`ProviderBuilder`](crate::ProviderBuilder) was handed an invalid
+    /// configuration (empty id, no adapters, duplicate protocols, a model the
+    /// provider can't serve). Surfaced as a `Result` from
+    /// [`build`](crate::ProviderBuilder::build) — never a panic.
+    #[error("invalid provider configuration: {0}")]
+    Config(String),
+
     /// An [`AuthResolver`](crate::AuthResolver) failed to produce credentials.
     /// Surfaces in-band as a terminal [`ErrorKind::Auth`] error event, not as a
     /// synchronous `Result` from [`stream`](crate::Provider::stream).
