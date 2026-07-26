@@ -4,10 +4,14 @@
 //! - `generate-catalog [--input <api.json>]` — regenerate the bundled model
 //!   catalogs for `banshu-ai` from [models.dev](https://models.dev). Fetches
 //!   `https://models.dev/api.json` unless `--input` points at a local copy.
+//!   Parsing and filtering rules come from `banshu_ai::models_dev`, the same
+//!   module the runtime catalog refresh uses.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use banshu_ai::models_dev::{ModelsDevModel, models_from_api_json};
+use banshu_ai::{Modality, ModelCost};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -41,6 +45,40 @@ struct CatalogCost {
     output: f64,
     cache_read: f64,
     cache_write: f64,
+}
+
+impl From<ModelsDevModel> for CatalogModel {
+    fn from(model: ModelsDevModel) -> Self {
+        CatalogModel {
+            id: model.id,
+            name: model.name,
+            reasoning: model.reasoning,
+            input: model.input.iter().map(modality_str).collect(),
+            context_window: model.context_window,
+            max_tokens: model.max_tokens,
+            cost: CatalogCost::from(model.cost),
+        }
+    }
+}
+
+impl From<ModelCost> for CatalogCost {
+    fn from(cost: ModelCost) -> Self {
+        CatalogCost {
+            input: cost.input,
+            output: cost.output,
+            cache_read: cost.cache_read,
+            cache_write: cost.cache_write,
+        }
+    }
+}
+
+fn modality_str(modality: &Modality) -> String {
+    match modality {
+        Modality::Text => "text",
+        Modality::Image => "image",
+        other => unreachable!("catalog filter keeps only text/image modalities: {other:?}"),
+    }
+    .to_string()
 }
 
 fn main() {
@@ -85,17 +123,16 @@ fn generate_catalog(input: Option<PathBuf>) -> Result<(), Box<dyn std::error::Er
     std::fs::create_dir_all(&out_dir)?;
 
     for (banshu_id, source_key) in PROVIDERS {
-        let models = data
-            .get(source_key)
-            .and_then(|p| p.get("models"))
-            .and_then(Value::as_object)
+        let models = models_from_api_json(&data, source_key)
             .ok_or_else(|| format!("models.dev has no models for `{source_key}`"))?;
 
+        // Only tool-calling text-in/text-out models ship in the catalog.
         // BTreeMap keeps the output deterministic (sorted by id).
-        let mut catalog: BTreeMap<String, CatalogModel> = BTreeMap::new();
-        for (id, model) in models {
-            catalog.insert(id.clone(), catalog_model(id, model));
-        }
+        let catalog: BTreeMap<String, CatalogModel> = models
+            .into_iter()
+            .filter(ModelsDevModel::is_tool_calling_text_model)
+            .map(|model| (model.id.clone(), CatalogModel::from(model)))
+            .collect();
         let entries: Vec<&CatalogModel> = catalog.values().collect();
 
         let path = out_dir.join(format!("{banshu_id}.json"));
@@ -104,32 +141,4 @@ fn generate_catalog(input: Option<PathBuf>) -> Result<(), Box<dyn std::error::Er
         println!("wrote {} ({} models)", path.display(), entries.len());
     }
     Ok(())
-}
-
-fn catalog_model(id: &str, model: &Value) -> CatalogModel {
-    let cost = &model["cost"];
-    CatalogModel {
-        id: id.to_string(),
-        name: model["name"].as_str().unwrap_or(id).to_string(),
-        reasoning: model["reasoning"].as_bool().unwrap_or(false),
-        input: model["modalities"]["input"]
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter(|m| *m == "text" || *m == "image")
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_else(|| vec!["text".to_string()]),
-        context_window: model["limit"]["context"].as_u64().unwrap_or(0) as u32,
-        max_tokens: model["limit"]["output"].as_u64().unwrap_or(0) as u32,
-        cost: CatalogCost {
-            input: cost["input"].as_f64().unwrap_or(0.0),
-            output: cost["output"].as_f64().unwrap_or(0.0),
-            cache_read: cost["cache_read"].as_f64().unwrap_or(0.0),
-            cache_write: cost["cache_write"].as_f64().unwrap_or(0.0),
-        },
-    }
 }

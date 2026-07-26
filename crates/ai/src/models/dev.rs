@@ -1,10 +1,11 @@
 //! Runtime parsing of models.dev `api.json` — the catalog-refresh layer of
-//! dynamic discovery. Mirrors the shape the `xtask` generator consumes at
-//! build time.
+//! dynamic discovery. Field mapping and capability rules live in
+//! [`crate::models_dev`], shared with the `xtask` catalog generator; this
+//! module only stamps provider identity onto the parsed entries.
 
 use serde_json::Value;
 
-use crate::types::{ApiKind, Modality, Model, ModelCost};
+use crate::types::{ApiKind, Model, ModelCapabilities};
 
 /// The models.dev entries for `models_dev_id`, stamped with the owning
 /// provider's id, base URL, and wire protocol. `None` if the key is missing
@@ -16,42 +17,26 @@ pub(crate) fn models_from_api_json(
     base_url: &str,
     api: ApiKind,
 ) -> Option<Vec<Model>> {
-    let models = data.get(models_dev_id)?.get("models")?.as_object()?;
+    let parsed = crate::models_dev::models_from_api_json(data, models_dev_id)?;
     Some(
-        models
-            .iter()
-            .map(|(id, entry)| parse_model(id, entry, provider_id, base_url, api))
+        parsed
+            .into_iter()
+            .map(|entry| Model {
+                id: entry.id,
+                name: entry.name,
+                api,
+                provider: provider_id.to_string(),
+                base_url: base_url.to_string(),
+                headers: Default::default(),
+                reasoning: entry.reasoning,
+                input: entry.input,
+                capabilities: ModelCapabilities {
+                    tool_calling: entry.tool_calling,
+                },
+                cost: entry.cost,
+                context_window: entry.context_window,
+                max_tokens: entry.max_tokens,
+            })
             .collect(),
     )
-}
-
-fn parse_model(id: &str, entry: &Value, provider_id: &str, base_url: &str, api: ApiKind) -> Model {
-    let cost = &entry["cost"];
-    Model {
-        id: id.to_string(),
-        name: entry["name"].as_str().unwrap_or(id).to_string(),
-        api,
-        provider: provider_id.to_string(),
-        base_url: base_url.to_string(),
-        headers: Default::default(),
-        reasoning: entry["reasoning"].as_bool().unwrap_or(false),
-        input: entry["modalities"]["input"]
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter_map(super::modality_from_str)
-                    .collect()
-            })
-            .unwrap_or_else(|| vec![Modality::Text]),
-        cost: ModelCost {
-            input: cost["input"].as_f64().unwrap_or(0.0),
-            output: cost["output"].as_f64().unwrap_or(0.0),
-            cache_read: cost["cache_read"].as_f64().unwrap_or(0.0),
-            cache_write: cost["cache_write"].as_f64().unwrap_or(0.0),
-        },
-        context_window: entry["limit"]["context"].as_u64().unwrap_or(0) as u32,
-        max_tokens: entry["limit"]["output"].as_u64().unwrap_or(0) as u32,
-    }
 }
