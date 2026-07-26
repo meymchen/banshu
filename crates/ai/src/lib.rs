@@ -16,6 +16,10 @@
 //! - Any Anthropic-compatible API
 
 pub mod api;
+/// Shared models.dev mapping — a published seam for `xtask generate-catalog`,
+/// not curated end-user API.
+#[doc(hidden)]
+pub mod models_dev;
 pub mod provider;
 
 mod auth;

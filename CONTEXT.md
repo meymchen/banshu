@@ -32,6 +32,19 @@ exits.
 The metadata convention for Probe-synthesized models: cost, context window,
 and max tokens are `0` to mean "unknown", never guessed.
 
+**Capability Support** (`Supported` / `Unsupported` / `Unknown`):
+The honesty convention for model capabilities (`ModelCapabilities`). A
+capability is attested only when the metadata source says so — models.dev
+`tool_call` maps true/false/missing onto the three variants, and Probe models
+are always `Unknown`. `Unknown` is never presented as supported.
+
+**Agent Models** (`Models::agent_models()`):
+The subset of the model list attested as tool-calling — the safe pool for an
+agent loop. The bundled Catalog is generated to contain exactly these
+(tool-calling, text-in/text-out); `models()` keeps serving the full Overlay
+including `Unknown` Probe models for explicit selection.
+_Avoid_: supported models, tool models
+
 ### Core (established)
 
 **Provider**:
