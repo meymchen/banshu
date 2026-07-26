@@ -1,56 +1,5 @@
 [
   {
-    "id": "k2p5",
-    "name": "Kimi K2.5",
-    "reasoning": true,
-    "input": [
-      "text",
-      "image"
-    ],
-    "context_window": 262144,
-    "max_tokens": 32768,
-    "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
-    }
-  },
-  {
-    "id": "k2p6",
-    "name": "Kimi K2.6",
-    "reasoning": true,
-    "input": [
-      "text",
-      "image"
-    ],
-    "context_window": 262144,
-    "max_tokens": 32768,
-    "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
-    }
-  },
-  {
-    "id": "k2p7",
-    "name": "Kimi K2.7 Code",
-    "reasoning": true,
-    "input": [
-      "text",
-      "image"
-    ],
-    "context_window": 262144,
-    "max_tokens": 32768,
-    "cost": {
-      "input": 0.0,
-      "output": 0.0,
-      "cache_read": 0.0,
-      "cache_write": 0.0
-    }
-  },
-  {
     "id": "k3",
     "name": "Kimi K3",
     "reasoning": true,
@@ -68,8 +17,25 @@
     }
   },
   {
-    "id": "kimi-for-coding-highspeed",
-    "name": "Kimi For Coding HighSpeed",
+    "id": "k3-256k",
+    "name": "Kimi K3-256K",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "context_window": 262144,
+    "max_tokens": 131072,
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    }
+  },
+  {
+    "id": "kimi-for-coding",
+    "name": "Kimi K2.7 Code",
     "reasoning": true,
     "input": [
       "text",
@@ -85,11 +51,12 @@
     }
   },
   {
-    "id": "kimi-k2-thinking",
-    "name": "Kimi K2 Thinking",
+    "id": "kimi-for-coding-highspeed",
+    "name": "Kimi For Coding HighSpeed",
     "reasoning": true,
     "input": [
-      "text"
+      "text",
+      "image"
     ],
     "context_window": 262144,
     "max_tokens": 32768,

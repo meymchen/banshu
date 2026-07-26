@@ -28,6 +28,29 @@ pub enum Modality {
     Image,
 }
 
+/// Whether a model capability is known to work. `Unknown` is never presented
+/// as supported: capability gating must match on [`Supported`](Self::Supported)
+/// explicitly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CapabilitySupport {
+    /// Confirmed supported by the metadata source.
+    Supported,
+    /// Confirmed unsupported by the metadata source.
+    Unsupported,
+    /// The metadata source says nothing; nothing is guessed.
+    #[default]
+    Unknown,
+}
+
+/// What a model can do, per capability. Every source that cannot attest a
+/// capability leaves it [`CapabilitySupport::Unknown`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModelCapabilities {
+    /// Tool calling (function calling).
+    pub tool_calling: CapabilitySupport,
+}
+
 /// Per-token cost rates in USD per million tokens.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModelCost {
@@ -60,6 +83,8 @@ pub struct Model {
     pub reasoning: bool,
     /// Accepted input modalities.
     pub input: Vec<Modality>,
+    /// Capability attestations from the model's metadata source.
+    pub capabilities: ModelCapabilities,
     /// Token cost rates.
     pub cost: ModelCost,
     /// Maximum context window in tokens.
@@ -80,6 +105,7 @@ impl std::fmt::Debug for Model {
             .field("headers", &RedactedHeaders(&self.headers))
             .field("reasoning", &self.reasoning)
             .field("input", &self.input)
+            .field("capabilities", &self.capabilities)
             .field("cost", &self.cost)
             .field("context_window", &self.context_window)
             .field("max_tokens", &self.max_tokens)
@@ -101,6 +127,7 @@ impl Model {
             headers: ProviderHeaders::new(),
             reasoning: false,
             input: vec![Modality::Text],
+            capabilities: ModelCapabilities::default(),
             cost: ModelCost::default(),
             context_window: 0,
             max_tokens: 0,
@@ -119,6 +146,7 @@ impl Model {
             headers: ProviderHeaders::new(),
             reasoning: false,
             input: vec![Modality::Text],
+            capabilities: ModelCapabilities::default(),
             cost: ModelCost::default(),
             context_window: 0,
             max_tokens: 0,

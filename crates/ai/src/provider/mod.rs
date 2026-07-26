@@ -395,6 +395,8 @@ impl Provider {
                 headers: Default::default(),
                 reasoning: false,
                 input: vec![crate::types::Modality::Text],
+                // A bare id attests nothing: capabilities stay Unknown.
+                capabilities: crate::types::ModelCapabilities::default(),
                 cost: crate::types::ModelCost::default(),
                 context_window: 0,
                 max_tokens: 0,
