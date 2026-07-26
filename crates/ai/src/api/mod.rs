@@ -44,6 +44,7 @@ pub struct PreparedRequest {
     context: Context,
     options: StreamOptions,
     auth: ResolvedAuth,
+    header_layers: HeaderLayers,
     headers: ProviderHeaders,
     http: reqwest::Client,
     openai_compat: OpenAiCompat,
@@ -71,11 +72,24 @@ impl PreparedRequest {
         &self.auth
     }
 
-    /// Provider-level default headers, applied below [`ResolvedAuth::headers`]
-    /// in the priority chain. (`None` values are currently no-ops; deletion
-    /// semantics land with the headers-merge work.)
+    /// Effective headers above the protocol-default layer, after provider,
+    /// model, generated-auth, resolved-auth, and request layers have been
+    /// merged case-insensitively.
     pub fn headers(&self) -> &ProviderHeaders {
         &self.headers
+    }
+
+    /// Merge this request's fixed header chain over adapter-supplied protocol
+    /// defaults.
+    ///
+    /// This is the header seam for third-party adapters: the result contains
+    /// no case-insensitive duplicates or `None` tombstones and is ready to
+    /// attach to the final HTTP request.
+    pub fn headers_with_protocol_defaults(
+        &self,
+        protocol_defaults: &ProviderHeaders,
+    ) -> ProviderHeaders {
+        self.header_layers.merge(protocol_defaults)
     }
 
     /// The provider's shared HTTP client (one connection pool per provider).
@@ -92,6 +106,38 @@ impl PreparedRequest {
     pub fn anthropic_compat(&self) -> AnthropicCompat {
         self.anthropic_compat
     }
+}
+
+struct HeaderLayers {
+    provider: ProviderHeaders,
+    model: ProviderHeaders,
+    generated_auth: ProviderHeaders,
+    resolved_auth: ProviderHeaders,
+    request: ProviderHeaders,
+}
+
+impl HeaderLayers {
+    fn merge(&self, protocol_defaults: &ProviderHeaders) -> ProviderHeaders {
+        crate::auth::merge_header_layers([
+            protocol_defaults,
+            &self.provider,
+            &self.model,
+            &self.generated_auth,
+            &self.resolved_auth,
+            &self.request,
+        ])
+    }
+}
+
+fn generated_auth_headers(kind: ApiKind, api_key: Option<&str>) -> ProviderHeaders {
+    let Some(api_key) = api_key else {
+        return ProviderHeaders::new();
+    };
+    let (name, value) = match kind {
+        ApiKind::OpenAiCompletions => ("Authorization", format!("Bearer {api_key}")),
+        ApiKind::AnthropicMessages => ("x-api-key", api_key.to_string()),
+    };
+    ProviderHeaders::from([(name.to_string(), Some(value))])
 }
 
 /// A wire protocol that can stream a chat completion — the seam a third-party
@@ -122,13 +168,10 @@ pub(crate) fn api_name(kind: ApiKind) -> &'static str {
     }
 }
 
-/// Attach one [`ProviderHeaders`] layer to a request, skipping `None` values.
+/// Attach an already-merged [`ProviderHeaders`] map to a request.
 ///
-/// Layers are applied in priority order (protocol defaults → provider
-/// defaults → auth headers), but reqwest *appends* same-named headers rather
-/// than overriding, so a layer colliding with an earlier one currently sends
-/// both values. The case-insensitive override/delete merge (PRD v0.3 §5.5)
-/// replaces this.
+/// The merge step has removed tombstones and case-insensitive duplicates, so
+/// this writes each effective header exactly once.
 pub(crate) fn apply_headers(
     mut builder: reqwest::RequestBuilder,
     headers: &ProviderHeaders,
@@ -168,7 +211,7 @@ pub(crate) fn drive(
     let context = context.clone();
     let options = options.clone();
     let auth = auth.clone();
-    let headers = headers.clone();
+    let provider_headers = headers.clone();
     let http_client = http_client.clone();
 
     let stream = async_stream::stream! {
@@ -197,11 +240,20 @@ pub(crate) fn drive(
             }
         };
 
+        let header_layers = HeaderLayers {
+            provider: provider_headers,
+            model: model.headers.clone(),
+            generated_auth: generated_auth_headers(adapter.kind(), resolved.api_key.as_deref()),
+            resolved_auth: resolved.headers.clone(),
+            request: options.headers.clone(),
+        };
+        let headers = header_layers.merge(&ProviderHeaders::new());
         let prepared = PreparedRequest {
             model,
             context,
             options,
             auth: resolved,
+            header_layers,
             headers,
             http: http_client,
             openai_compat,

@@ -392,6 +392,7 @@ impl Provider {
                 api: self.api_kind,
                 provider: self.id.clone(),
                 base_url: self.base_url.clone(),
+                headers: Default::default(),
                 reasoning: false,
                 input: vec![crate::types::Modality::Text],
                 cost: crate::types::ModelCost::default(),

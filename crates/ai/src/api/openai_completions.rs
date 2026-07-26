@@ -31,48 +31,55 @@ impl ProtocolAdapter for OpenAiCompletions {
     }
 
     fn stream(&self, request: PreparedRequest) -> ProtocolEventStream {
+        let cache_retention = request
+            .options
+            .cache_retention
+            .unwrap_or(CacheRetention::Short);
+        let session_headers = (request.openai_compat.prompt_caching
+            == OpenAiPromptCaching::SessionAffinityHeaders
+            && cache_retention != CacheRetention::Disabled)
+            .then(|| request.options.session_id.clone())
+            .flatten();
+        let mut protocol_headers = crate::ProviderHeaders::from([(
+            "Content-Type".to_string(),
+            Some("application/json".to_string()),
+        )]);
+        if let Some(session_id) = session_headers {
+            protocol_headers.extend([
+                ("session_id".to_string(), Some(session_id.clone())),
+                ("x-client-request-id".to_string(), Some(session_id.clone())),
+                ("x-session-affinity".to_string(), Some(session_id)),
+            ]);
+        }
+        let final_headers = request.headers_with_protocol_defaults(&protocol_headers);
         let PreparedRequest {
             model,
             context,
             options,
             auth,
-            headers,
             http,
             openai_compat,
             ..
         } = request;
-        let body = build_request_body(&model, &context, &options, openai_compat);
+        let body = serde_json::to_vec(&build_request_body(
+            &model,
+            &context,
+            &options,
+            openai_compat,
+        ))
+        .unwrap_or_default();
         let base_url = model.base_url.clone();
         let cost = model.cost.clone();
         let timeout = options.timeout;
         let max_retries = options.max_retries.unwrap_or(http::DEFAULT_MAX_RETRIES);
         let max_retry_delay = options.max_retry_delay;
-        let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
-        let session_id = options.session_id.clone();
-        let prompt_caching = openai_compat.prompt_caching;
 
         let stream = async_stream::stream! {
             let base = auth.base_url.as_deref().unwrap_or(&base_url);
             let url = format!("{}/chat/completions", base.trim_end_matches('/'));
-            let api_key = auth.api_key;
-            let auth_headers = auth.headers;
-
-            let session_headers = (prompt_caching == OpenAiPromptCaching::SessionAffinityHeaders
-                && cache_retention != CacheRetention::Disabled)
-                .then_some(session_id)
-                .flatten();
             let factory = move || {
-                let mut builder = super::apply_headers(http.post(&url).json(&body), &headers);
-                if let Some(api_key) = &api_key {
-                    builder = builder.bearer_auth(api_key);
-                }
-                builder = super::apply_headers(builder, &auth_headers);
-                if let Some(session_id) = &session_headers {
-                    builder = builder
-                        .header("session_id", session_id)
-                        .header("x-client-request-id", session_id)
-                        .header("x-session-affinity", session_id);
-                }
+                let mut builder =
+                    super::apply_headers(http.post(&url).body(body.clone()), &final_headers);
                 if let Some(timeout) = timeout {
                     builder = builder.timeout(timeout);
                 }

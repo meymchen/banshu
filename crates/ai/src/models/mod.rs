@@ -67,6 +67,7 @@ pub(crate) fn catalog_models(provider_id: &str, base_url: &str, api: ApiKind) ->
             api,
             provider: provider_id.to_string(),
             base_url: base_url.to_string(),
+            headers: Default::default(),
             reasoning: entry.reasoning,
             input: entry
                 .input
