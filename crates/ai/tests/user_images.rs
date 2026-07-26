@@ -7,7 +7,7 @@
 //! `ErrorKind::InvalidRequest` before any HTTP request is issued.
 //!
 //! One request fixture per image-capable protocol family: `glm-4.5v`
-//! (openai-completions, zai catalog) and `k2p5` (anthropic-messages, kimi
+//! (openai-completions, zai catalog) and `k3` (anthropic-messages, kimi
 //! catalog) are catalog-declared image models.
 
 use banshu_ai::{
@@ -97,17 +97,17 @@ fn openai_image_model(server: &MockServer) -> Model {
     model.with_base_url(server.uri())
 }
 
-/// The kimi catalog declares k2p5 image-capable (§4.3). Re-pointed at the mock.
+/// The kimi catalog declares k3 image-capable (§4.3). Re-pointed at the mock.
 fn anthropic_image_model(server: &MockServer) -> Model {
     let model = Provider::kimi()
         .models()
         .iter()
-        .find(|m| m.id == "k2p5")
-        .expect("k2p5 should be in the kimi catalog")
+        .find(|m| m.id == "k3")
+        .expect("k3 should be in the kimi catalog")
         .clone();
     assert!(
         model.input.contains(&Modality::Image),
-        "kimi catalog should declare k2p5 image-capable"
+        "kimi catalog should declare k3 image-capable"
     );
     model.with_base_url(server.uri())
 }
