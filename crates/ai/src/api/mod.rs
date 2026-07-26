@@ -44,7 +44,7 @@ pub struct PreparedRequest {
     context: Context,
     options: StreamOptions,
     auth: ResolvedAuth,
-    provider_headers: ProviderHeaders,
+    header_layers: HeaderLayers,
     headers: ProviderHeaders,
     http: reqwest::Client,
     openai_compat: OpenAiCompat,
@@ -72,10 +72,24 @@ impl PreparedRequest {
         &self.auth
     }
 
-    /// Effective custom headers after provider, model, resolved-auth, and
-    /// request layers have been merged case-insensitively.
+    /// Effective headers above the protocol-default layer, after provider,
+    /// model, generated-auth, resolved-auth, and request layers have been
+    /// merged case-insensitively.
     pub fn headers(&self) -> &ProviderHeaders {
         &self.headers
+    }
+
+    /// Merge this request's fixed header chain over adapter-supplied protocol
+    /// defaults.
+    ///
+    /// This is the header seam for third-party adapters: the result contains
+    /// no case-insensitive duplicates or `None` tombstones and is ready to
+    /// attach to the final HTTP request.
+    pub fn headers_with_protocol_defaults(
+        &self,
+        protocol_defaults: &ProviderHeaders,
+    ) -> ProviderHeaders {
+        self.header_layers.merge(protocol_defaults)
     }
 
     /// The provider's shared HTTP client (one connection pool per provider).
@@ -92,6 +106,38 @@ impl PreparedRequest {
     pub fn anthropic_compat(&self) -> AnthropicCompat {
         self.anthropic_compat
     }
+}
+
+struct HeaderLayers {
+    provider: ProviderHeaders,
+    model: ProviderHeaders,
+    generated_auth: ProviderHeaders,
+    resolved_auth: ProviderHeaders,
+    request: ProviderHeaders,
+}
+
+impl HeaderLayers {
+    fn merge(&self, protocol_defaults: &ProviderHeaders) -> ProviderHeaders {
+        crate::auth::merge_header_layers([
+            protocol_defaults,
+            &self.provider,
+            &self.model,
+            &self.generated_auth,
+            &self.resolved_auth,
+            &self.request,
+        ])
+    }
+}
+
+fn generated_auth_headers(kind: ApiKind, api_key: Option<&str>) -> ProviderHeaders {
+    let Some(api_key) = api_key else {
+        return ProviderHeaders::new();
+    };
+    let (name, value) = match kind {
+        ApiKind::OpenAiCompletions => ("Authorization", format!("Bearer {api_key}")),
+        ApiKind::AnthropicMessages => ("x-api-key", api_key.to_string()),
+    };
+    ProviderHeaders::from([(name.to_string(), Some(value))])
 }
 
 /// A wire protocol that can stream a chat completion — the seam a third-party
@@ -194,18 +240,20 @@ pub(crate) fn drive(
             }
         };
 
-        let headers = crate::auth::merge_header_layers([
-            &provider_headers,
-            &model.headers,
-            &resolved.headers,
-            &options.headers,
-        ]);
+        let header_layers = HeaderLayers {
+            provider: provider_headers,
+            model: model.headers.clone(),
+            generated_auth: generated_auth_headers(adapter.kind(), resolved.api_key.as_deref()),
+            resolved_auth: resolved.headers.clone(),
+            request: options.headers.clone(),
+        };
+        let headers = header_layers.merge(&ProviderHeaders::new());
         let prepared = PreparedRequest {
             model,
             context,
             options,
             auth: resolved,
-            provider_headers,
+            header_layers,
             headers,
             http: http_client,
             openai_compat,

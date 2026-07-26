@@ -33,68 +33,55 @@ impl ProtocolAdapter for AnthropicMessages {
     }
 
     fn stream(&self, request: PreparedRequest) -> ProtocolEventStream {
+        // Session affinity routes prompt-cache hits to the same replica; it
+        // serves nothing when caching is disabled.
+        let caching = request
+            .options
+            .cache_retention
+            .unwrap_or(CacheRetention::Short)
+            != CacheRetention::Disabled;
+        let session_affinity = (request.anthropic_compat.send_session_affinity_headers && caching)
+            .then(|| request.options.session_id.clone())
+            .flatten();
+        let mut protocol_headers = crate::ProviderHeaders::from([
+            (
+                "Content-Type".to_string(),
+                Some("application/json".to_string()),
+            ),
+            (
+                "Anthropic-Version".to_string(),
+                Some(ANTHROPIC_VERSION.to_string()),
+            ),
+        ]);
+        if let Some(session_id) = session_affinity {
+            protocol_headers.insert("x-session-affinity".to_string(), Some(session_id));
+        }
+        let final_headers = request.headers_with_protocol_defaults(&protocol_headers);
         let PreparedRequest {
             model,
             context,
             options,
             auth,
-            provider_headers,
             http,
             anthropic_compat,
             ..
         } = request;
-        let body = build_request_body(&model, &context, &options, anthropic_compat);
+        let body = serde_json::to_vec(&build_request_body(
+            &model,
+            &context,
+            &options,
+            anthropic_compat,
+        ))
+        .unwrap_or_default();
         let base_url = model.base_url.clone();
         let cost = model.cost.clone();
         let timeout = options.timeout;
         let max_retries = options.max_retries.unwrap_or(http::DEFAULT_MAX_RETRIES);
         let max_retry_delay = options.max_retry_delay;
-        // Session affinity routes prompt-cache hits to the same replica; it
-        // serves nothing when caching is disabled.
-        let caching =
-            options.cache_retention.unwrap_or(CacheRetention::Short) != CacheRetention::Disabled;
-        let session_affinity = (anthropic_compat.send_session_affinity_headers && caching)
-            .then_some(options.session_id.clone())
-            .flatten();
-        let model_headers = model.headers.clone();
-        let request_headers = options.headers.clone();
 
         let stream = async_stream::stream! {
             let base = auth.base_url.as_deref().unwrap_or(&base_url);
             let url = format!("{}/v1/messages", base.trim_end_matches('/'));
-            let api_key = auth.api_key;
-            let auth_headers = auth.headers;
-
-            let mut protocol_headers = crate::ProviderHeaders::from([
-                ("Content-Type".to_string(), Some("application/json".to_string())),
-                (
-                    "Anthropic-Version".to_string(),
-                    Some(ANTHROPIC_VERSION.to_string()),
-                ),
-            ]);
-            if let Some(session_id) = session_affinity {
-                protocol_headers.insert(
-                    "x-session-affinity".to_string(),
-                    Some(session_id),
-                );
-            }
-            let generated_auth_headers = api_key
-                .map(|key| {
-                    crate::ProviderHeaders::from([(
-                        "x-api-key".to_string(),
-                        Some(key),
-                    )])
-                })
-                .unwrap_or_default();
-            let final_headers = crate::auth::merge_header_layers([
-                &protocol_headers,
-                &provider_headers,
-                &model_headers,
-                &generated_auth_headers,
-                &auth_headers,
-                &request_headers,
-            ]);
-            let body = serde_json::to_vec(&body).unwrap_or_default();
             let factory = move || {
                 let mut builder =
                     super::apply_headers(http.post(&url).body(body.clone()), &final_headers);

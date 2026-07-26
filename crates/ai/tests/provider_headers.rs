@@ -28,7 +28,8 @@ impl ProtocolAdapter for CapturingAdapter {
 
     fn stream(&self, request: PreparedRequest) -> ProtocolEventStream {
         let mut captured = self.captured.lock().expect("capture lock");
-        captured.headers = request.headers().clone();
+        captured.headers = request
+            .headers_with_protocol_defaults(&headers(&[("X-Protocol-Deleted", Some("protocol"))]));
         captured.metadata = request.options().metadata.clone();
         Box::pin(futures::stream::iter([ProtocolEvent::Stop(
             banshu_ai::StopReason::Stop,
@@ -72,6 +73,7 @@ fn headers(entries: &[(&str, Option<&str>)]) -> ProviderHeaders {
 async fn prepared_request_merges_custom_headers_case_insensitively_in_priority_order() {
     let captured = Arc::new(Mutex::new(CapturedRequest::default()));
     let provider_headers = headers(&[
+        ("x-protocol-deleted", None),
         ("X-Provider-Only", Some("provider")),
         ("X-Provider-Overridden", Some("provider")),
         ("X-Provider-Deleted", Some("provider")),
