@@ -38,7 +38,7 @@ impl ProtocolAdapter for AnthropicMessages {
             context,
             options,
             auth,
-            headers,
+            provider_headers,
             http,
             anthropic_compat,
             ..
@@ -56,6 +56,8 @@ impl ProtocolAdapter for AnthropicMessages {
         let session_affinity = (anthropic_compat.send_session_affinity_headers && caching)
             .then_some(options.session_id.clone())
             .flatten();
+        let model_headers = model.headers.clone();
+        let request_headers = options.headers.clone();
 
         let stream = async_stream::stream! {
             let base = auth.base_url.as_deref().unwrap_or(&base_url);
@@ -63,20 +65,39 @@ impl ProtocolAdapter for AnthropicMessages {
             let api_key = auth.api_key;
             let auth_headers = auth.headers;
 
-            let factory = move || {
-                let mut builder = super::apply_headers(
-                    http.post(&url)
-                        .header("anthropic-version", ANTHROPIC_VERSION)
-                        .json(&body),
-                    &headers,
+            let mut protocol_headers = crate::ProviderHeaders::from([
+                ("Content-Type".to_string(), Some("application/json".to_string())),
+                (
+                    "Anthropic-Version".to_string(),
+                    Some(ANTHROPIC_VERSION.to_string()),
+                ),
+            ]);
+            if let Some(session_id) = session_affinity {
+                protocol_headers.insert(
+                    "x-session-affinity".to_string(),
+                    Some(session_id),
                 );
-                if let Some(api_key) = &api_key {
-                    builder = builder.header("x-api-key", api_key);
-                }
-                builder = super::apply_headers(builder, &auth_headers);
-                if let Some(session_id) = &session_affinity {
-                    builder = builder.header("x-session-affinity", session_id);
-                }
+            }
+            let generated_auth_headers = api_key
+                .map(|key| {
+                    crate::ProviderHeaders::from([(
+                        "x-api-key".to_string(),
+                        Some(key),
+                    )])
+                })
+                .unwrap_or_default();
+            let final_headers = crate::auth::merge_header_layers([
+                &protocol_headers,
+                &provider_headers,
+                &model_headers,
+                &generated_auth_headers,
+                &auth_headers,
+                &request_headers,
+            ]);
+            let body = serde_json::to_vec(&body).unwrap_or_default();
+            let factory = move || {
+                let mut builder =
+                    super::apply_headers(http.post(&url).body(body.clone()), &final_headers);
                 if let Some(timeout) = timeout {
                     builder = builder.timeout(timeout);
                 }

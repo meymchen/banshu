@@ -18,18 +18,82 @@ use async_trait::async_trait;
 
 use crate::error::{Error, Result};
 
-/// Custom request headers contributed by an auth resolver or a provider's
-/// defaults.
+/// Custom request headers contributed at provider, model, resolved-auth, and
+/// request levels.
 ///
-/// Today [`ResolvedAuth::headers`] and provider-level defaults are the only
-/// sources, attached to the request in priority order (a `None` value is a
-/// no-op). The full case-insensitive merge chain — model/request levels,
-/// same-name override, and `None`-means-delete — lands with the headers work
-/// (PRD v0.3 §5.5).
+/// Names merge case-insensitively in the fixed priority chain documented on
+/// [`StreamOptions::headers`](crate::StreamOptions::headers). `None` deletes a
+/// same-named lower-priority header.
 pub type ProviderHeaders = BTreeMap<String, Option<String>>;
 
+pub(crate) struct RedactedHeaders<'a>(pub(crate) &'a ProviderHeaders);
+
+impl std::fmt::Debug for RedactedHeaders<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = formatter.debug_map();
+        for (name, value) in self.0 {
+            if is_sensitive_header_name(name) {
+                map.entry(name, &value.as_ref().map(|_| "[REDACTED]"));
+            } else {
+                map.entry(name, value);
+            }
+        }
+        map.finish()
+    }
+}
+
+pub(crate) fn is_sensitive_header_name(name: &str) -> bool {
+    let lowercase = name.to_ascii_lowercase();
+    let compact = lowercase
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>();
+    matches!(
+        lowercase.as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "cookie"
+            | "set-cookie"
+            | "x-auth-token"
+            | "access-token"
+            | "refresh-token"
+            | "id-token"
+            | "client-secret"
+    ) || compact.contains("apikey")
+        || compact.contains("accesstoken")
+        || compact.contains("refreshtoken")
+        || compact.contains("clientsecret")
+}
+
+/// Merge header layers from lowest to highest priority.
+///
+/// Header names compare case-insensitively. A higher-priority value replaces
+/// both the value and casing of a lower-priority entry; `None` removes it.
+pub(crate) fn merge_header_layers<'a>(
+    layers: impl IntoIterator<Item = &'a ProviderHeaders>,
+) -> ProviderHeaders {
+    let mut merged = BTreeMap::<String, (String, String)>::new();
+    for layer in layers {
+        for (name, value) in layer {
+            let normalized = name.to_ascii_lowercase();
+            match value {
+                Some(value) => {
+                    merged.insert(normalized, (name.clone(), value.clone()));
+                }
+                None => {
+                    merged.remove(&normalized);
+                }
+            }
+        }
+    }
+    merged
+        .into_values()
+        .map(|(name, value)| (name, Some(value)))
+        .collect()
+}
+
 /// Credentials and endpoint overrides produced by an [`AuthResolver`].
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ResolvedAuth {
     /// The API key to authenticate with, if the endpoint needs one. `None`
     /// sends no auth header (a keyless endpoint).
@@ -39,6 +103,17 @@ pub struct ResolvedAuth {
     /// Overrides the model's base URL when set — for a resolver that also
     /// discovers the endpoint. `None` keeps the model's configured base URL.
     pub base_url: Option<String>,
+}
+
+impl std::fmt::Debug for ResolvedAuth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedAuth")
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("headers", &RedactedHeaders(&self.headers))
+            .field("base_url", &self.base_url)
+            .finish()
+    }
 }
 
 /// Resolves the credentials a provider authenticates with.

@@ -36,7 +36,7 @@ impl ProtocolAdapter for OpenAiCompletions {
             context,
             options,
             auth,
-            headers,
+            provider_headers,
             http,
             openai_compat,
             ..
@@ -49,6 +49,8 @@ impl ProtocolAdapter for OpenAiCompletions {
         let max_retry_delay = options.max_retry_delay;
         let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
         let session_id = options.session_id.clone();
+        let model_headers = model.headers.clone();
+        let request_headers = options.headers.clone();
         let prompt_caching = openai_compat.prompt_caching;
 
         let stream = async_stream::stream! {
@@ -61,18 +63,37 @@ impl ProtocolAdapter for OpenAiCompletions {
                 && cache_retention != CacheRetention::Disabled)
                 .then_some(session_id)
                 .flatten();
+            let mut protocol_headers = crate::ProviderHeaders::from([(
+                "Content-Type".to_string(),
+                Some("application/json".to_string()),
+            )]);
+            if let Some(session_id) = session_headers {
+                protocol_headers.extend([
+                    ("session_id".to_string(), Some(session_id.clone())),
+                    ("x-client-request-id".to_string(), Some(session_id.clone())),
+                    ("x-session-affinity".to_string(), Some(session_id)),
+                ]);
+            }
+            let generated_auth_headers = api_key
+                .map(|key| {
+                    crate::ProviderHeaders::from([(
+                        "Authorization".to_string(),
+                        Some(format!("Bearer {key}")),
+                    )])
+                })
+                .unwrap_or_default();
+            let final_headers = crate::auth::merge_header_layers([
+                &protocol_headers,
+                &provider_headers,
+                &model_headers,
+                &generated_auth_headers,
+                &auth_headers,
+                &request_headers,
+            ]);
+            let body = serde_json::to_vec(&body).unwrap_or_default();
             let factory = move || {
-                let mut builder = super::apply_headers(http.post(&url).json(&body), &headers);
-                if let Some(api_key) = &api_key {
-                    builder = builder.bearer_auth(api_key);
-                }
-                builder = super::apply_headers(builder, &auth_headers);
-                if let Some(session_id) = &session_headers {
-                    builder = builder
-                        .header("session_id", session_id)
-                        .header("x-client-request-id", session_id)
-                        .header("x-session-affinity", session_id);
-                }
+                let mut builder =
+                    super::apply_headers(http.post(&url).body(body.clone()), &final_headers);
                 if let Some(timeout) = timeout {
                     builder = builder.timeout(timeout);
                 }

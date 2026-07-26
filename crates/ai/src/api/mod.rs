@@ -44,6 +44,7 @@ pub struct PreparedRequest {
     context: Context,
     options: StreamOptions,
     auth: ResolvedAuth,
+    provider_headers: ProviderHeaders,
     headers: ProviderHeaders,
     http: reqwest::Client,
     openai_compat: OpenAiCompat,
@@ -71,9 +72,8 @@ impl PreparedRequest {
         &self.auth
     }
 
-    /// Provider-level default headers, applied below [`ResolvedAuth::headers`]
-    /// in the priority chain. (`None` values are currently no-ops; deletion
-    /// semantics land with the headers-merge work.)
+    /// Effective custom headers after provider, model, resolved-auth, and
+    /// request layers have been merged case-insensitively.
     pub fn headers(&self) -> &ProviderHeaders {
         &self.headers
     }
@@ -122,13 +122,10 @@ pub(crate) fn api_name(kind: ApiKind) -> &'static str {
     }
 }
 
-/// Attach one [`ProviderHeaders`] layer to a request, skipping `None` values.
+/// Attach an already-merged [`ProviderHeaders`] map to a request.
 ///
-/// Layers are applied in priority order (protocol defaults → provider
-/// defaults → auth headers), but reqwest *appends* same-named headers rather
-/// than overriding, so a layer colliding with an earlier one currently sends
-/// both values. The case-insensitive override/delete merge (PRD v0.3 §5.5)
-/// replaces this.
+/// The merge step has removed tombstones and case-insensitive duplicates, so
+/// this writes each effective header exactly once.
 pub(crate) fn apply_headers(
     mut builder: reqwest::RequestBuilder,
     headers: &ProviderHeaders,
@@ -168,7 +165,7 @@ pub(crate) fn drive(
     let context = context.clone();
     let options = options.clone();
     let auth = auth.clone();
-    let headers = headers.clone();
+    let provider_headers = headers.clone();
     let http_client = http_client.clone();
 
     let stream = async_stream::stream! {
@@ -197,11 +194,18 @@ pub(crate) fn drive(
             }
         };
 
+        let headers = crate::auth::merge_header_layers([
+            &provider_headers,
+            &model.headers,
+            &resolved.headers,
+            &options.headers,
+        ]);
         let prepared = PreparedRequest {
             model,
             context,
             options,
             auth: resolved,
+            provider_headers,
             headers,
             http: http_client,
             openai_compat,

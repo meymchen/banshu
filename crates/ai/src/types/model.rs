@@ -1,5 +1,7 @@
 //! The `Model` metadata type and its supporting enums.
 
+use crate::auth::{ProviderHeaders, RedactedHeaders};
+
 /// Which wire protocol a model speaks. Used for identification and to route
 /// the model to the matching [`ProtocolAdapter`](crate::ProtocolAdapter).
 ///
@@ -40,7 +42,7 @@ pub struct ModelCost {
 }
 
 /// Metadata describing a single model on a provider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Model {
     /// Provider-specific model id sent on the wire (e.g. `deepseek-chat`).
     pub id: String,
@@ -52,6 +54,8 @@ pub struct Model {
     pub provider: String,
     /// Base URL of the API endpoint.
     pub base_url: String,
+    /// Model-specific custom headers, applied above provider defaults.
+    pub headers: ProviderHeaders,
     /// Whether the model supports reasoning / thinking.
     pub reasoning: bool,
     /// Accepted input modalities.
@@ -62,6 +66,25 @@ pub struct Model {
     pub context_window: u32,
     /// Maximum output tokens per response.
     pub max_tokens: u32,
+}
+
+impl std::fmt::Debug for Model {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Model")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("api", &self.api)
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("headers", &RedactedHeaders(&self.headers))
+            .field("reasoning", &self.reasoning)
+            .field("input", &self.input)
+            .field("cost", &self.cost)
+            .field("context_window", &self.context_window)
+            .field("max_tokens", &self.max_tokens)
+            .finish()
+    }
 }
 
 impl Model {
@@ -75,6 +98,7 @@ impl Model {
             api: ApiKind::OpenAiCompletions,
             provider: String::new(),
             base_url: String::new(),
+            headers: ProviderHeaders::new(),
             reasoning: false,
             input: vec![Modality::Text],
             cost: ModelCost::default(),
@@ -92,6 +116,7 @@ impl Model {
             api: ApiKind::AnthropicMessages,
             provider: String::new(),
             base_url: String::new(),
+            headers: ProviderHeaders::new(),
             reasoning: false,
             input: vec![Modality::Text],
             cost: ModelCost::default(),
