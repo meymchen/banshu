@@ -59,6 +59,12 @@ and stream dispatch by model id.
 A failure delivered as a stream event carrying partial content, not a
 `Result::Err`. Only setup/config errors are `Result`s.
 
+**Modality gate**:
+The pre-flight check in stream dispatch: if the newest user message carries an
+image and the model does not declare `Modality::Image`, the stream terminates
+in-band with `ErrorKind::InvalidRequest` before any HTTP request. Historical
+images are not downgraded (v0.4 normalizer scope).
+
 **Context Snapshot** (`ContextSnapshotV1`):
 The versioned JSON persistence format for a `Context`, pinned by a golden
 fixture. The serialized shape (camelCase, `role`/`type` tags) is a published
