@@ -27,8 +27,8 @@ use crate::options::StreamOptions;
 use crate::provider::{AnthropicCompat, OpenAiCompat};
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
-    ApiKind, AssistantMessage, Context, Cost, Diagnostic, DiagnosticCode, Model, ModelCost,
-    StopReason, Usage,
+    ApiKind, AssistantMessage, Context, Cost, Diagnostic, DiagnosticCode, Message, Modality, Model,
+    ModelCost, StopReason, Usage,
 };
 
 /// A fully-resolved request handed to a [`ProtocolAdapter`].
@@ -222,6 +222,14 @@ pub(crate) fn drive(
         ));
         yield AssistantMessageEvent::Start;
 
+        // Modality gate: a newest-turn image on a model without declared
+        // image input fails in-band before auth resolution or any HTTP
+        // request. Downgrading historical images is normalizer scope.
+        if let Some(detail) = image_modality_violation(&model, &context) {
+            yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
+            return;
+        }
+
         let cancellation = options.cancellation.clone();
         let resolved = match cancel::race(
             cancellation.as_ref(),
@@ -300,6 +308,21 @@ pub(crate) fn drive(
     };
 
     MessageStream::new(stream)
+}
+
+/// The modality gate: the newest user message carries an image while the
+/// model does not declare [`Modality::Image`] input.
+fn image_modality_violation(model: &Model, context: &Context) -> Option<String> {
+    let newest_user = context
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            Message::User(user) => Some(user),
+            _ => None,
+        })?;
+    (newest_user.has_image() && !model.input.contains(&Modality::Image))
+        .then(|| format!("model `{}` does not accept image input", model.id))
 }
 
 /// Compute cost from token counts and per-million rates.
