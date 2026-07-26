@@ -4,102 +4,76 @@
 //! Speaks the Messages SSE event stream: `message_start` carries input usage,
 //! `content_block_delta` carries text/thinking/tool fragments, `message_delta`
 //! carries the stop reason and output usage, `message_stop` ends the turn.
+//! Wire events are translated into [`ProtocolEvent`]s; assembly into public
+//! events and the final message is the driver's job (see [`crate::api`]).
 
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::assembler::{MessageAssembler, is_terminal};
 use super::protocol_event::ProtocolEvent;
-use super::{ApiRequest, ChatApi, compute_cost};
+use super::{PreparedRequest, ProtocolAdapter, ProtocolEventStream, compute_cost};
 use crate::CacheRetention;
-use crate::cancel;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::provider::AnthropicCompat;
-use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
-    AssistantContent, AssistantMessage, Context, Message, Model, StopReason, ThinkingContent, Usage,
+    ApiKind, AssistantContent, Context, Message, Model, StopReason, ThinkingContent, Usage,
 };
 
 /// The Anthropic Messages wire protocol.
 pub struct AnthropicMessages;
 
-const API_NAME: &str = "anthropic-messages";
 pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
-impl ChatApi for AnthropicMessages {
-    fn stream(&self, request: ApiRequest<'_>) -> MessageStream {
-        let body = build_request_body(
-            request.model,
-            request.context,
-            request.options,
-            request.anthropic_compat,
-        );
-        let base_url = request.model.base_url.clone();
-        let auth = request.auth.clone();
-        let explicit_key = request.options.api_key.clone();
-        let http_client = request.http.clone();
-        let model_id = request.model.id.clone();
-        let provider = request.model.provider.clone();
-        let cost = request.model.cost.clone();
-        let timeout = request.options.timeout;
-        let max_retries = request
-            .options
-            .max_retries
-            .unwrap_or(http::DEFAULT_MAX_RETRIES);
-        let max_retry_delay = request.options.max_retry_delay;
-        let cancellation = request.options.cancellation.clone();
+impl ProtocolAdapter for AnthropicMessages {
+    fn kind(&self) -> ApiKind {
+        ApiKind::AnthropicMessages
+    }
+
+    fn stream(&self, request: PreparedRequest) -> ProtocolEventStream {
+        let PreparedRequest {
+            model,
+            context,
+            options,
+            auth,
+            headers,
+            http,
+            anthropic_compat,
+            ..
+        } = request;
+        let body = build_request_body(&model, &context, &options, anthropic_compat);
+        let base_url = model.base_url.clone();
+        let cost = model.cost.clone();
+        let timeout = options.timeout;
+        let max_retries = options.max_retries.unwrap_or(http::DEFAULT_MAX_RETRIES);
+        let max_retry_delay = options.max_retry_delay;
         // Session affinity routes prompt-cache hits to the same replica; it
         // serves nothing when caching is disabled.
-        let caching = request
-            .options
-            .cache_retention
-            .unwrap_or(CacheRetention::Short)
-            != CacheRetention::Disabled;
-        let session_affinity = (request.anthropic_compat.send_session_affinity_headers && caching)
-            .then(|| request.options.session_id.clone())
+        let caching =
+            options.cache_retention.unwrap_or(CacheRetention::Short) != CacheRetention::Disabled;
+        let session_affinity = (anthropic_compat.send_session_affinity_headers && caching)
+            .then_some(options.session_id.clone())
             .flatten();
 
         let stream = async_stream::stream! {
-            let mut assembler = MessageAssembler::new(AssistantMessage::streaming(&model_id, &provider, API_NAME));
-            yield AssistantMessageEvent::Start;
-
-            let resolved = match cancel::race(
-                cancellation.as_ref(),
-                crate::auth::resolve_for_request(&auth, explicit_key),
-            )
-            .await
-            {
-                Ok(Ok(resolved)) => resolved,
-                Ok(Err(err)) => {
-                    yield assembler.fail(crate::ErrorKind::Auth, err.to_string(), Vec::new());
-                    return;
-                }
-                Err(cancel::Aborted) => {
-                    yield assembler.abort("request was cancelled");
-                    return;
-                }
-            };
-            let base = resolved.base_url.as_deref().unwrap_or(&base_url);
+            let base = auth.base_url.as_deref().unwrap_or(&base_url);
             let url = format!("{}/v1/messages", base.trim_end_matches('/'));
-            let api_key = resolved.api_key;
-            let extra_headers = resolved.headers;
+            let api_key = auth.api_key;
+            let auth_headers = auth.headers;
 
             let factory = move || {
-                let mut builder = http_client
-                    .post(&url)
-                    .header("anthropic-version", ANTHROPIC_VERSION)
-                    .json(&body);
+                let mut builder = super::apply_headers(
+                    http.post(&url)
+                        .header("anthropic-version", ANTHROPIC_VERSION)
+                        .json(&body),
+                    &headers,
+                );
                 if let Some(api_key) = &api_key {
                     builder = builder.header("x-api-key", api_key);
                 }
-                for (name, value) in &extra_headers {
-                    if let Some(value) = value {
-                        builder = builder.header(name, value);
-                    }
-                }
+                builder = super::apply_headers(builder, &auth_headers);
                 if let Some(session_id) = &session_affinity {
                     builder = builder.header("x-session-affinity", session_id);
                 }
@@ -120,26 +94,20 @@ impl ChatApi for AnthropicMessages {
             // is a dropped connection, not a completed response.
             let mut saw_message_stop = false;
 
-            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay, cancellation));
+            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay));
             'outer: while let Some(exec_event) = exec.next().await {
                 let data = match exec_event {
                     ExecutorEvent::Retry { attempt, max_attempts, delay, kind } => {
-                        if let Some(event) = assembler.apply(ProtocolEvent::Retry { attempt, max_attempts, delay, kind }) {
-                            yield event;
-                        }
+                        yield ProtocolEvent::Retry { attempt, max_attempts, delay, kind };
                         continue;
                     }
                     ExecutorEvent::Established { request_id } => {
-                        let _ = assembler.apply(ProtocolEvent::ResponseMetadata { response_id: request_id, response_model: None });
+                        yield ProtocolEvent::ResponseMetadata { response_id: request_id, response_model: None };
                         continue;
                     }
                     ExecutorEvent::Eof => break 'outer,
-                    ExecutorEvent::Failed { kind, message: detail, diagnostics } => {
-                        yield assembler.fail(kind, detail, diagnostics);
-                        return;
-                    }
-                    ExecutorEvent::Aborted => {
-                        yield assembler.abort("request was cancelled");
+                    ExecutorEvent::Failed { kind, message, diagnostics } => {
+                        yield ProtocolEvent::Failure { kind, message, diagnostics };
                         return;
                     }
                     ExecutorEvent::Event(sse_event) => sse_event,
@@ -147,17 +115,25 @@ impl ChatApi for AnthropicMessages {
                 let event_field = data.event;
                 let value = match super::parse_sse_json(data.data) {
                     Ok(value) => value,
-                    Err((detail, diagnostic)) => {
-                        yield assembler.fail(crate::ErrorKind::Protocol, detail, vec![diagnostic]);
+                    Err((message, diagnostic)) => {
+                        yield ProtocolEvent::Failure {
+                            kind: crate::ErrorKind::Protocol,
+                            message,
+                            diagnostics: vec![diagnostic],
+                        };
                         return;
                     }
                 };
                 if event_field.as_deref() == Some("error")
                     || value.get("type").and_then(Value::as_str) == Some("error")
                 {
-                    let detail = http::json_error_summary(&value)
+                    let message = http::json_error_summary(&value)
                         .unwrap_or_else(|| "provider returned an error".to_string());
-                    yield assembler.fail(crate::ErrorKind::Api, detail, Vec::new());
+                    yield ProtocolEvent::Failure {
+                        kind: crate::ErrorKind::Api,
+                        message,
+                        diagnostics: Vec::new(),
+                    };
                     return;
                 }
                 match value.get("type").and_then(Value::as_str) {
@@ -199,11 +175,7 @@ impl ChatApi for AnthropicMessages {
                             blocks.resize_with(index + 1, || None);
                         }
                         blocks[index] = Some(WireBlock { kind, ended: false });
-                        if let Some(event) = assembler.apply(start) {
-                            let terminal = is_terminal(&event);
-                            yield event;
-                            if terminal { return; }
-                        }
+                        yield start;
                     }
                     Some("content_block_delta") => {
                         let index = value["index"].as_u64().unwrap_or(0) as usize;
@@ -222,12 +194,8 @@ impl ChatApi for AnthropicMessages {
                                 .map(|fragment| ProtocolEvent::ToolCallDelta { block_id, delta: fragment.to_string() }),
                             _ => None,
                         };
-                        if let Some(event) = event
-                            && let Some(event) = assembler.apply(event)
-                        {
-                            let terminal = is_terminal(&event);
+                        if let Some(event) = event {
                             yield event;
-                            if terminal { return; }
                         }
                     }
                     Some("content_block_stop") => {
@@ -237,11 +205,7 @@ impl ChatApi for AnthropicMessages {
                             && !block.ended
                         {
                             block.ended = true;
-                            if let Some(event) = assembler.apply(block.kind.end_event(block_id)) {
-                                let terminal = is_terminal(&event);
-                                yield event;
-                                if terminal { return; }
-                            }
+                            yield block.kind.end_event(block_id);
                         }
                     }
                     Some("message_delta") => {
@@ -268,11 +232,11 @@ impl ChatApi for AnthropicMessages {
             }
 
             if !saw_message_stop {
-                yield assembler.fail(
-                    crate::ErrorKind::StreamInterrupted,
-                    "connection closed before message_stop",
-                    Vec::new(),
-                );
+                yield ProtocolEvent::Failure {
+                    kind: crate::ErrorKind::StreamInterrupted,
+                    message: "connection closed before message_stop".to_string(),
+                    diagnostics: Vec::new(),
+                };
                 return;
             }
 
@@ -284,25 +248,18 @@ impl ChatApi for AnthropicMessages {
                     && !block.ended
                 {
                     block.ended = true;
-                    if let Some(event) = assembler.apply(block.kind.end_event(index as u64)) {
-                        let terminal = is_terminal(&event);
-                        yield event;
-                        if terminal { return; }
-                    }
+                    yield block.kind.end_event(index as u64);
                 }
             }
 
             // Anthropic reports no total; derive it from all token classes.
             usage.total_tokens = usage.input + usage.output + usage.cache_read + usage.cache_write;
             usage.cost = compute_cost(&usage, &cost);
-            let _ = assembler.apply(ProtocolEvent::Usage(usage));
-            let _ = assembler.apply(ProtocolEvent::Stop(stop_reason));
-
-            let message = assembler.into_message();
-            yield AssistantMessageEvent::Done { reason: stop_reason, message };
+            yield ProtocolEvent::Usage(usage);
+            yield ProtocolEvent::Stop(stop_reason);
         };
 
-        MessageStream::new(stream)
+        Box::pin(stream)
     }
 }
 
