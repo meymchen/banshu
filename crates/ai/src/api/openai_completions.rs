@@ -17,7 +17,7 @@ use crate::http;
 use crate::provider::{OpenAiCompat, OpenAiPromptCaching};
 use crate::types::{
     ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model, StopReason,
-    ThinkingContent, Usage,
+    ThinkingContent, Usage, UserContent, UserMessage,
 };
 
 /// The OpenAI-completions wire protocol.
@@ -356,6 +356,31 @@ fn clamp_openai_prompt_cache_key(key: &str) -> String {
         .collect()
 }
 
+/// Text-only user messages keep the plain-string wire shape; an image turns
+/// the message into multi-part content blocks, with each image as an
+/// `image_url` block carrying a base64 data URL.
+fn user_content_wire(user: &UserMessage) -> serde_json::Value {
+    use serde_json::{Value, json};
+
+    if !user.has_image() {
+        return Value::String(user.text_content());
+    }
+    Value::Array(
+        user.content
+            .iter()
+            .map(|content| match content {
+                UserContent::Text(text) => json!({ "type": "text", "text": text.text }),
+                UserContent::Image(image) => json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:{};base64,{}", image.mime_type, image.data),
+                    },
+                }),
+            })
+            .collect(),
+    )
+}
+
 fn build_request_body(
     model: &Model,
     context: &Context,
@@ -371,7 +396,7 @@ fn build_request_body(
     for message in &context.messages {
         match message {
             Message::User(user) => {
-                messages.push(json!({ "role": "user", "content": user.text_content() }));
+                messages.push(json!({ "role": "user", "content": user_content_wire(user) }));
             }
             Message::Assistant(assistant) => {
                 let tool_calls: Vec<Value> = assistant

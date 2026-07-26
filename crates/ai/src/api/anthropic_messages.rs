@@ -19,6 +19,7 @@ use crate::http;
 use crate::provider::AnthropicCompat;
 use crate::types::{
     ApiKind, AssistantContent, Context, Message, Model, StopReason, ThinkingContent, Usage,
+    UserContent, UserMessage,
 };
 
 /// The Anthropic Messages wire protocol.
@@ -343,6 +344,33 @@ fn cache_control(options: &crate::StreamOptions) -> Option<Value> {
     }
 }
 
+/// Text-only user messages keep the plain-string wire shape; an image turns
+/// the message into content blocks, with each image as an `image` block
+/// carrying a base64 `source`.
+fn user_content_wire(user: &UserMessage) -> Value {
+    if !user.has_image() {
+        return Value::String(user.text_content());
+    }
+    Value::Array(
+        user.content
+            .iter()
+            .map(|content| match content {
+                UserContent::Text(text) => {
+                    serde_json::json!({ "type": "text", "text": text.text })
+                }
+                UserContent::Image(image) => serde_json::json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": image.mime_type,
+                        "data": image.data,
+                    },
+                }),
+            })
+            .collect(),
+    )
+}
+
 fn build_request_body(
     model: &Model,
     context: &Context,
@@ -354,8 +382,9 @@ fn build_request_body(
     for message in &context.messages {
         match message {
             Message::User(user) => {
-                messages
-                    .push(serde_json::json!({ "role": "user", "content": user.text_content() }));
+                messages.push(
+                    serde_json::json!({ "role": "user", "content": user_content_wire(user) }),
+                );
             }
             Message::Assistant(assistant) => {
                 let blocks: Vec<Value> = assistant

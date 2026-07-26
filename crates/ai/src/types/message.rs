@@ -246,6 +246,13 @@ impl UserMessage {
             .collect::<Vec<_>>()
             .join("")
     }
+
+    /// Whether any content block is an image.
+    pub fn has_image(&self) -> bool {
+        self.content
+            .iter()
+            .any(|c| matches!(c, UserContent::Image(_)))
+    }
 }
 
 /// Accept pi-ai's `string | blocks[]` user content, normalizing to blocks.
