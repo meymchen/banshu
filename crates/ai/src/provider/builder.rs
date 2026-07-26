@@ -73,9 +73,9 @@ impl ProviderBuilder {
         self
     }
 
-    /// Provider-level default headers, applied to every request below the
-    /// auth/request layers. Empty by default. (`None` values are currently
-    /// no-ops; deletion semantics land with the headers-merge work.)
+    /// Provider-level default headers, applied above protocol defaults and
+    /// below model/auth/request layers. Empty by default. `None` deletes a
+    /// same-named protocol default.
     pub fn headers(mut self, headers: ProviderHeaders) -> Self {
         self.headers = headers;
         self

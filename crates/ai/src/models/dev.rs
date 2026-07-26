@@ -33,6 +33,7 @@ fn parse_model(id: &str, entry: &Value, provider_id: &str, base_url: &str, api: 
         api,
         provider: provider_id.to_string(),
         base_url: base_url.to_string(),
+        headers: Default::default(),
         reasoning: entry["reasoning"].as_bool().unwrap_or(false),
         input: entry["modalities"]["input"]
             .as_array()
