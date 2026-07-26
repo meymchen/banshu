@@ -56,6 +56,18 @@ impl Models {
         self.providers.iter().flat_map(Provider::models).collect()
     }
 
+    /// The subset of [`models`](Self::models) attested to support tool calling
+    /// — the safe pool for an agent loop. Probe-discovered and caller-built
+    /// models report [`CapabilitySupport::Unknown`](crate::CapabilitySupport)
+    /// and are excluded; they remain explicitly selectable via
+    /// [`models`](Self::models) and [`get`](Self::get).
+    pub fn agent_models(&self) -> Vec<Model> {
+        self.models()
+            .into_iter()
+            .filter(|model| model.capabilities.tool_calling == crate::CapabilitySupport::Supported)
+            .collect()
+    }
+
     /// Models whose provider is currently usable — a set env-var key, a
     /// keyless endpoint, or a custom resolver whose `check` passes. Async
     /// because a custom [`AuthResolver`](crate::AuthResolver) may need real

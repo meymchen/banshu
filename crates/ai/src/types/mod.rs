@@ -19,7 +19,7 @@ pub use message::{
     AssistantMessage, Diagnostic, DiagnosticCode, Message, StopReason, ToolResultMessage,
     UserMessage,
 };
-pub use model::{ApiKind, Modality, Model, ModelCost};
+pub use model::{ApiKind, CapabilitySupport, Modality, Model, ModelCapabilities, ModelCost};
 pub use tool::Tool;
 pub use usage::{Cost, Usage};
 
