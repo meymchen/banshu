@@ -8,8 +8,7 @@
 //! builds the assembled [`AssistantMessage`](crate::AssistantMessage)). This
 //! is the minimal interface a custom adapter must learn: it carries no
 //! provider-specific wire JSON and gives no access to the public
-//! [`AssistantMessageEvent`](crate::AssistantMessageEvent)s. See PRD v0.3
-//! §5.4/§6.
+//! [`AssistantMessageEvent`](crate::AssistantMessageEvent)s.
 
 use std::pin::Pin;
 use std::time::Duration;

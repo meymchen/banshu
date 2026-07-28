@@ -1,6 +1,5 @@
-//! `MessageStream::partial()`/`result()`/`finish()` (PRD v0.3 §6.2), added in
-//! the ProtocolEvent/MessageAssembler expand phase alongside the pre-existing
-//! `final_message()` — both must keep working during the migration.
+//! `MessageStream::partial()`/`result()`/`finish()`, added in the
+//! ProtocolEvent/MessageAssembler expand phase.
 
 use banshu_ai::{Context, Model, Provider, StopReason, StreamOptions};
 use futures_util::StreamExt;
