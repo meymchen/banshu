@@ -4,7 +4,7 @@
 //! drift apart:
 //!
 //! - `xtask generate-catalog` parses, keeps only
-//!   [`is_tool_calling_text_model`](ModelsDevModel::is_tool_calling_text_model)
+//!   [`is_tool_calling_text_model`](crate::models_dev::ModelsDevModel::is_tool_calling_text_model)
 //!   entries, and writes the bundled catalog.
 //! - The runtime Catalog Refresh (the crate's internal `models` module) parses
 //!   the same way and stamps each [`Model`](crate::Model) with the mapped
