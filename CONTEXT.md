@@ -65,6 +65,16 @@ image and the model does not declare `Modality::Image`, the stream terminates
 in-band with `ErrorKind::InvalidRequest` before any HTTP request. Historical
 images are not downgraded (v0.4 normalizer scope).
 
+**Tool-image downgrade**:
+The §8.2 sibling of the modality gate for tool results: on a model without
+`Modality::Image`, each image block in a tool result is replaced on the wire
+with the fixed text `(tool image omitted: model does not support images)`
+(text blocks kept, order preserved), an `ImageDowngraded` diagnostic lands on
+the resulting message, and the tool result as a whole is never dropped. On an
+image-capable model, OpenAI sends `tool` messages text-only and trails a run
+of consecutive tool results with one user message carrying every image;
+Anthropic puts `image` blocks inside the `tool_result` content.
+
 **Context Snapshot** (`ContextSnapshotV1`):
 The versioned JSON persistence format for a `Context`, pinned by a golden
 fixture. The serialized shape (camelCase, `role`/`type` tags) is a published

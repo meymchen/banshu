@@ -365,6 +365,12 @@ impl AssistantMessage {
     }
 }
 
+/// The fixed text that replaces a tool-result image block the target model
+/// cannot see (§8.2): the image's data never reaches a text-only model, and
+/// the tool result as a whole is never silently dropped.
+pub(crate) const TOOL_IMAGE_OMITTED_PLACEHOLDER: &str =
+    "(tool image omitted: model does not support images)";
+
 /// The result of a tool call, fed back for the next turn.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -416,6 +422,13 @@ impl ToolResultMessage {
         }
     }
 
+    /// Whether any content block is an image.
+    pub(crate) fn has_image(&self) -> bool {
+        self.content
+            .iter()
+            .any(|content| matches!(content, UserContent::Image(_)))
+    }
+
     /// Join text blocks in order for text-only wire formats.
     pub(crate) fn text_content(&self) -> String {
         self.content
@@ -423,6 +436,21 @@ impl ToolResultMessage {
             .filter_map(|content| match content {
                 UserContent::Text(text) => Some(text.text.as_str()),
                 UserContent::Image(_) => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Join blocks in order for text-only wire formats, replacing each image
+    /// block with [`TOOL_IMAGE_OMITTED_PLACEHOLDER`] — the §8.2 downgrade for
+    /// a model that does not accept image input, so the tool result as a
+    /// whole is never silently dropped.
+    pub(crate) fn text_content_with_image_placeholders(&self) -> String {
+        self.content
+            .iter()
+            .map(|content| match content {
+                UserContent::Text(text) => text.text.as_str(),
+                UserContent::Image(_) => TOOL_IMAGE_OMITTED_PLACEHOLDER,
             })
             .collect::<Vec<_>>()
             .join("\n")

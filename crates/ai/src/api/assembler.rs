@@ -293,6 +293,10 @@ impl MessageAssembler {
                 }
                 None
             }
+            ProtocolEvent::Diagnostic(diagnostic) => {
+                self.message.diagnostics.push(diagnostic);
+                None
+            }
             ProtocolEvent::Retry {
                 attempt,
                 max_attempts,
@@ -613,5 +617,21 @@ mod tests {
         let message = a.into_message();
         assert_eq!(message.usage.input, 10);
         assert_eq!(message.stop_reason, StopReason::Length);
+    }
+
+    #[test]
+    fn diagnostic_lands_on_the_message_without_emitting_an_event() {
+        let mut a = assembler();
+        assert!(
+            a.apply(ProtocolEvent::Diagnostic(Diagnostic::new(
+                DiagnosticCode::ImageDowngraded,
+                "1 tool-result image(s) omitted: model `m` does not support images",
+            )))
+            .is_none()
+        );
+        let message = a.into_message();
+        assert_eq!(message.diagnostics.len(), 1);
+        assert_eq!(message.diagnostics[0].code, DiagnosticCode::ImageDowngraded);
+        assert_eq!(message.stop_reason, StopReason::Stop);
     }
 }
