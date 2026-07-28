@@ -110,6 +110,11 @@ pub enum ProtocolEvent {
         /// Concrete routed model id, when it differs from the requested one.
         response_model: Option<String>,
     },
+    /// A non-fatal, safe diagnostic to attach to the assembled message's
+    /// `diagnostics` — e.g. the §8.2 tool-image downgrade on a model without
+    /// image input. Produces no public event; it only lands on the final
+    /// [`AssistantMessage`](crate::AssistantMessage).
+    Diagnostic(Diagnostic),
     /// The request failed before the response stream started and will be
     /// retried after `delay`.
     Retry {

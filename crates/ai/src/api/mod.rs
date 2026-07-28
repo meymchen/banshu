@@ -28,7 +28,7 @@ use crate::provider::{AnthropicCompat, OpenAiCompat};
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
     ApiKind, AssistantMessage, Context, Cost, Diagnostic, DiagnosticCode, Message, Modality, Model,
-    ModelCost, StopReason, Usage,
+    ModelCost, StopReason, Usage, UserContent,
 };
 
 /// A fully-resolved request handed to a [`ProtocolAdapter`].
@@ -323,6 +323,38 @@ fn image_modality_violation(model: &Model, context: &Context) -> Option<String> 
         })?;
     (newest_user.has_image() && !model.input.contains(&Modality::Image))
         .then(|| format!("model `{}` does not accept image input", model.id))
+}
+
+/// The §8.2 tool-image downgrade report: when the model does not declare
+/// [`Modality::Image`] input, an adapter replaces every image block in a tool
+/// result with the fixed placeholder text on the wire — the tool result is
+/// never silently dropped — and reports the downgrade here so it lands on the
+/// resulting message's diagnostics.
+pub(crate) fn tool_image_downgrade(model: &Model, context: &Context) -> Option<Diagnostic> {
+    if model.input.contains(&Modality::Image) {
+        return None;
+    }
+    let count = context
+        .messages
+        .iter()
+        .map(|message| match message {
+            Message::ToolResult(result) => result
+                .content
+                .iter()
+                .filter(|content| matches!(content, UserContent::Image(_)))
+                .count(),
+            _ => 0,
+        })
+        .sum::<usize>();
+    (count > 0).then(|| {
+        Diagnostic::new(
+            DiagnosticCode::ImageDowngraded,
+            format!(
+                "{count} tool-result image(s) omitted: model `{}` does not support images",
+                model.id
+            ),
+        )
+    })
 }
 
 /// Compute cost from token counts and per-million rates.
