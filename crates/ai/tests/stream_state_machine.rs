@@ -1,4 +1,4 @@
-//! PRD v0.3 §6.1/§10.1 — the public `MessageStream` state machine.
+//! The public `MessageStream` state machine.
 //!
 //! Every stream emits exactly one `Start`, then a full `*Start`/`*Delta`/`*End`
 //! sequence per content block (with a stable `content_index` across a block's
