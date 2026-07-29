@@ -325,7 +325,7 @@ fn image_modality_violation(model: &Model, context: &Context) -> Option<String> 
         .then(|| format!("model `{}` does not accept image input", model.id))
 }
 
-/// The §8.2 tool-image downgrade report: when the model does not declare
+/// The tool-image downgrade report (issue #22): when the model does not declare
 /// [`Modality::Image`] input, an adapter replaces every image block in a tool
 /// result with the fixed placeholder text on the wire — the tool result is
 /// never silently dropped — and reports the downgrade here so it lands on the

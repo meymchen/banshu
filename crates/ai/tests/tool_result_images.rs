@@ -1,5 +1,5 @@
 //! Tool-result images on both protocols, with a loud downgrade on models
-//! that cannot see them (§8.2, issue #22).
+//! that cannot see them (issue #22).
 //!
 //! A text+image tool result reaches the wire in the protocol-compatible
 //! shape: OpenAI keeps `tool` messages text-only and trails a run of
@@ -31,7 +31,7 @@ const ANTHROPIC_STOP_BODY: &str = concat!(
 /// A 1x1 transparent PNG.
 const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-/// The fixed text replacing an image the model cannot see (§8.2).
+/// The fixed text replacing an image the model cannot see (issue #22).
 const PLACEHOLDER: &str = "(tool image omitted: model does not support images)";
 
 async fn mount_openai_sse(server: &MockServer) {
@@ -105,7 +105,7 @@ fn history(result_content: Vec<UserContent>) -> Context {
         )))
 }
 
-/// The zai catalog declares glm-4.5v image-capable (§4.3). Re-pointed at the
+/// The zai catalog declares glm-4.5v image-capable (issue #21). Re-pointed at the
 /// mock, as in `user_images.rs`.
 fn openai_image_model(server: &MockServer) -> Model {
     let model = Provider::zai()
@@ -121,7 +121,7 @@ fn openai_image_model(server: &MockServer) -> Model {
     model.with_base_url(server.uri())
 }
 
-/// The kimi catalog declares k3 image-capable (§4.3). Re-pointed at the mock.
+/// The kimi catalog declares k3 image-capable (issue #21). Re-pointed at the mock.
 fn anthropic_image_model(server: &MockServer) -> Model {
     let model = Provider::kimi()
         .models()

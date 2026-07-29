@@ -82,7 +82,7 @@ fn image_message() -> Message {
 }
 
 /// The zai catalog declares glm-4.5v image-capable; the fixture exercises the
-/// declared capability, not a hand-set one (§4.3). Re-pointed at the mock.
+/// declared capability, not a hand-set one (issue #21). Re-pointed at the mock.
 fn openai_image_model(server: &MockServer) -> Model {
     let model = Provider::zai()
         .models()
@@ -97,7 +97,7 @@ fn openai_image_model(server: &MockServer) -> Model {
     model.with_base_url(server.uri())
 }
 
-/// The kimi catalog declares k3 image-capable (§4.3). Re-pointed at the mock.
+/// The kimi catalog declares k3 image-capable (issue #21). Re-pointed at the mock.
 fn anthropic_image_model(server: &MockServer) -> Model {
     let model = Provider::kimi()
         .models()
