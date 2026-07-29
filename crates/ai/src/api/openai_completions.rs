@@ -68,7 +68,7 @@ impl ProtocolAdapter for OpenAiCompletions {
             openai_compat,
         ))
         .unwrap_or_default();
-        // §8.2: the body build replaced tool-result images with placeholder
+        // issue #22: the body build replaced tool-result images with placeholder
         // text on a text-only model; report it on the resulting message.
         let downgrade = super::tool_image_downgrade(&model, &context);
         let base_url = model.base_url.clone();
@@ -393,7 +393,7 @@ fn user_content_wire(user: &UserMessage) -> serde_json::Value {
 /// trailing `user` message carrying every image block from the run. Images
 /// cannot ride inside `tool` messages, and those must immediately follow the
 /// assistant turn, so the images trail the whole run instead. On a text-only
-/// model each image block is replaced in place with the §8.2 placeholder
+/// model each image block is replaced in place with the issue #22 placeholder
 /// text. Returns the index after the run.
 fn push_tool_results(
     messages: &mut Vec<serde_json::Value>,

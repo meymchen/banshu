@@ -110,7 +110,7 @@ pub enum ProtocolEvent {
         response_model: Option<String>,
     },
     /// A non-fatal, safe diagnostic to attach to the assembled message's
-    /// `diagnostics` — e.g. the §8.2 tool-image downgrade on a model without
+    /// `diagnostics` — e.g. the tool-image downgrade (issue #22) on a model without
     /// image input. Produces no public event; it only lands on the final
     /// [`AssistantMessage`](crate::AssistantMessage).
     Diagnostic(Diagnostic),

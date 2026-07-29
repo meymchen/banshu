@@ -366,7 +366,7 @@ impl AssistantMessage {
 }
 
 /// The fixed text that replaces a tool-result image block the target model
-/// cannot see (§8.2): the image's data never reaches a text-only model, and
+/// cannot see (issue #22): the image's data never reaches a text-only model, and
 /// the tool result as a whole is never silently dropped.
 pub(crate) const TOOL_IMAGE_OMITTED_PLACEHOLDER: &str =
     "(tool image omitted: model does not support images)";
@@ -442,7 +442,7 @@ impl ToolResultMessage {
     }
 
     /// Join blocks in order for text-only wire formats, replacing each image
-    /// block with [`TOOL_IMAGE_OMITTED_PLACEHOLDER`] — the §8.2 downgrade for
+    /// block with [`TOOL_IMAGE_OMITTED_PLACEHOLDER`] — the downgrade (issue #22) for
     /// a model that does not accept image input, so the tool result as a
     /// whole is never silently dropped.
     pub(crate) fn text_content_with_image_placeholders(&self) -> String {

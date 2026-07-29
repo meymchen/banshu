@@ -66,7 +66,7 @@ in-band with `ErrorKind::InvalidRequest` before any HTTP request. Historical
 images are not downgraded (v0.4 normalizer scope).
 
 **Tool-image downgrade**:
-The §8.2 sibling of the modality gate for tool results: on a model without
+The sibling of the modality gate for tool results (issue #22): on a model without
 `Modality::Image`, each image block in a tool result is replaced on the wire
 with the fixed text `(tool image omitted: model does not support images)`
 (text blocks kept, order preserved), an `ImageDowngraded` diagnostic lands on
