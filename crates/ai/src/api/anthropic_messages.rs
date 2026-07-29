@@ -74,7 +74,7 @@ impl ProtocolAdapter for AnthropicMessages {
             anthropic_compat,
         ))
         .unwrap_or_default();
-        // §8.2: the body build replaced tool-result images with placeholder
+        // issue #22: the body build replaced tool-result images with placeholder
         // text on a text-only model; report it on the resulting message.
         let downgrade = super::tool_image_downgrade(&model, &context);
         let base_url = model.base_url.clone();
@@ -381,7 +381,7 @@ fn user_content_wire(user: &UserMessage) -> Value {
 /// shape; with images the content becomes ordered blocks (each image carrying
 /// a base64 `source`), prepending a placeholder text block when the result
 /// has no text of its own. On a text-only model each image block is replaced
-/// in place with the §8.2 placeholder text and the all-text content keeps the
+/// in place with the issue #22 placeholder text and the all-text content keeps the
 /// plain-string shape.
 fn tool_result_content_wire(result: &ToolResultMessage, accepts_images: bool) -> Value {
     if !result.has_image() {

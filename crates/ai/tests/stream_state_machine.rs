@@ -278,7 +278,7 @@ async fn aborted_terminal_is_reported_once() {
         message_stream.result().map(|m| m.stop_reason),
         Some(StopReason::Aborted)
     );
-    // No retry once aborted (§6.3 "不再重试"): no Retry event at any delay.
+    // No retry once aborted (issue #17 "不再重试"): no Retry event at any delay.
     assert!(
         !collected
             .iter()
