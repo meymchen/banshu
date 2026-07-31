@@ -19,6 +19,7 @@
 
 use crate::types::{
     Context, Diagnostic, DiagnosticCode, Message, Modality, Model, TextContent, UserContent,
+    UserMessage,
 };
 
 /// The fixed text replacing a user image the target model cannot see.
@@ -93,7 +94,7 @@ pub(crate) fn normalize(model: &Model, context: &Context) -> Result<Normalized, 
 }
 
 /// The last user turn — the one the model is being asked to answer.
-fn newest_user_message(context: &Context) -> Option<&crate::types::UserMessage> {
+fn newest_user_message(context: &Context) -> Option<&UserMessage> {
     context
         .messages
         .iter()

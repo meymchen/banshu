@@ -344,19 +344,18 @@ fn cache_control(options: &crate::StreamOptions) -> Option<Value> {
     }
 }
 
-/// A single text block keeps the plain-string wire shape; anything richer
-/// becomes content blocks, with each image an `image` block carrying a base64
-/// `source`.
+/// Text-only user messages keep the plain-string wire shape; an image turns
+/// the message into content blocks, with each image as an `image` block
+/// carrying a base64 `source`.
 fn user_content_wire(user: &UserMessage) -> Value {
-    match user.content.as_slice() {
-        [] => Value::String(String::new()),
-        [UserContent::Text(text)] => Value::String(text.text.clone()),
-        blocks => Value::Array(blocks.iter().map(image_aware_block).collect()),
+    if !user.has_image() {
+        return Value::String(user.text_content());
     }
+    Value::Array(user.content.iter().map(content_block_wire).collect())
 }
 
 /// One user-or-tool-result content block in Anthropic's shape.
-fn image_aware_block(content: &UserContent) -> Value {
+fn content_block_wire(content: &UserContent) -> Value {
     match content {
         UserContent::Text(text) => serde_json::json!({ "type": "text", "text": text.text }),
         UserContent::Image(image) => serde_json::json!({
@@ -379,7 +378,7 @@ fn tool_result_content_wire(result: &ToolResultMessage) -> Value {
     if !result.has_image() {
         return Value::String(result.text_content());
     }
-    let mut blocks: Vec<Value> = result.content.iter().map(image_aware_block).collect();
+    let mut blocks: Vec<Value> = result.content.iter().map(content_block_wire).collect();
     if result.text_content().is_empty() {
         blocks.insert(
             0,

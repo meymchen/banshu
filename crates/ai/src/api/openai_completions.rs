@@ -356,30 +356,34 @@ fn clamp_openai_prompt_cache_key(key: &str) -> String {
         .collect()
 }
 
-/// A single text block keeps the plain-string wire shape; anything richer
-/// becomes multi-part content blocks, with each image an `image_url` block
-/// carrying a base64 data URL.
+/// Text-only user messages keep the plain-string wire shape; an image turns
+/// the message into multi-part content blocks, with each image as an
+/// `image_url` block carrying a base64 data URL.
 fn user_content_wire(user: &UserMessage) -> serde_json::Value {
     use serde_json::{Value, json};
 
-    match user.content.as_slice() {
-        [] => Value::String(String::new()),
-        [UserContent::Text(text)] => Value::String(text.text.clone()),
-        blocks => Value::Array(
-            blocks
-                .iter()
-                .map(|content| match content {
-                    UserContent::Text(text) => json!({ "type": "text", "text": text.text }),
-                    UserContent::Image(image) => json!({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": format!("data:{};base64,{}", image.mime_type, image.data),
-                        },
-                    }),
-                })
-                .collect(),
-        ),
+    if !user.has_image() {
+        return Value::String(user.text_content());
     }
+    Value::Array(
+        user.content
+            .iter()
+            .map(|content| match content {
+                UserContent::Text(text) => json!({ "type": "text", "text": text.text }),
+                UserContent::Image(image) => image_url_block(image),
+            })
+            .collect(),
+    )
+}
+
+/// An image as OpenAI's `image_url` block, carrying a base64 data URL.
+fn image_url_block(image: &crate::types::ImageContent) -> serde_json::Value {
+    serde_json::json!({
+        "type": "image_url",
+        "image_url": {
+            "url": format!("data:{};base64,{}", image.mime_type, image.data),
+        },
+    })
 }
 
 /// Serialize the run of consecutive tool results starting at `start`: one
@@ -413,12 +417,7 @@ fn push_tool_results(
         }));
         for block in &result.content {
             if let UserContent::Image(image) = block {
-                images.push(json!({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": format!("data:{};base64,{}", image.mime_type, image.data),
-                    },
-                }));
+                images.push(image_url_block(image));
             }
         }
         index += 1;

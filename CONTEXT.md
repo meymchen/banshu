@@ -83,7 +83,10 @@ not support images)` for a user image, `(tool image omitted: model does not
 support images)` for a tool result (issue #22) — a consecutive run of images
 collapsing into a single placeholder. Text blocks are kept, order is preserved,
 no message is dropped, and one `ImageDowngraded` diagnostic per kind lands on
-the resulting message. On an image-capable model nothing is replaced: OpenAI
+the resulting message — counting images omitted, which a collapsed run makes
+larger than the number of placeholders. A downgraded message is all text, so it
+takes the plain-string wire shape and the placeholder reads as part of the
+turn's text. On an image-capable model nothing is replaced: OpenAI
 sends `tool` messages text-only and trails a run of consecutive tool results
 with one user message carrying every image; Anthropic puts `image` blocks
 inside the `tool_result` content.
