@@ -1,5 +1,7 @@
 # AGENTS.md
 
+Scratch files are stored in `.scratch/`, do not delete anything within it without permission.
+
 ## Commit conventions
 
 Use [conventional commits](https://www.conventionalcommits.org) for commit messages and PR titles (PRs are squash-merged, so the PR title becomes the commit message): `feat:` triggers a minor version bump, `fix:` a patch bump, and a `!` suffix (e.g. `feat!:`) marks a breaking change. release-plz derives version bumps and changelogs from these.
