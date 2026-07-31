@@ -18,7 +18,7 @@ use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::provider::AnthropicCompat;
 use crate::types::{
-    ApiKind, AssistantContent, Context, Message, Modality, Model, StopReason, ThinkingContent,
+    ApiKind, AssistantContent, Context, Message, Model, StopReason, ThinkingContent,
     ToolResultMessage, Usage, UserContent, UserMessage,
 };
 
@@ -74,9 +74,6 @@ impl ProtocolAdapter for AnthropicMessages {
             anthropic_compat,
         ))
         .unwrap_or_default();
-        // issue #22: the body build replaced tool-result images with placeholder
-        // text on a text-only model; report it on the resulting message.
-        let downgrade = super::tool_image_downgrade(&model, &context);
         let base_url = model.base_url.clone();
         let cost = model.cost.clone();
         let timeout = options.timeout;
@@ -84,9 +81,6 @@ impl ProtocolAdapter for AnthropicMessages {
         let max_retry_delay = options.max_retry_delay;
 
         let stream = async_stream::stream! {
-            if let Some(diagnostic) = downgrade {
-                yield ProtocolEvent::Diagnostic(diagnostic);
-            }
             let base = auth.base_url.as_deref().unwrap_or(&base_url);
             let url = format!("{}/v1/messages", base.trim_end_matches('/'));
             let factory = move || {
@@ -350,61 +344,42 @@ fn cache_control(options: &crate::StreamOptions) -> Option<Value> {
     }
 }
 
-/// Text-only user messages keep the plain-string wire shape; an image turns
-/// the message into content blocks, with each image as an `image` block
-/// carrying a base64 `source`.
+/// A single text block keeps the plain-string wire shape; anything richer
+/// becomes content blocks, with each image an `image` block carrying a base64
+/// `source`.
 fn user_content_wire(user: &UserMessage) -> Value {
-    if !user.has_image() {
-        return Value::String(user.text_content());
+    match user.content.as_slice() {
+        [] => Value::String(String::new()),
+        [UserContent::Text(text)] => Value::String(text.text.clone()),
+        blocks => Value::Array(blocks.iter().map(image_aware_block).collect()),
     }
-    Value::Array(
-        user.content
-            .iter()
-            .map(|content| match content {
-                UserContent::Text(text) => {
-                    serde_json::json!({ "type": "text", "text": text.text })
-                }
-                UserContent::Image(image) => serde_json::json!({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": image.mime_type,
-                        "data": image.data,
-                    },
-                }),
-            })
-            .collect(),
-    )
+}
+
+/// One user-or-tool-result content block in Anthropic's shape.
+fn image_aware_block(content: &UserContent) -> Value {
+    match content {
+        UserContent::Text(text) => serde_json::json!({ "type": "text", "text": text.text }),
+        UserContent::Image(image) => serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image.mime_type,
+                "data": image.data,
+            },
+        }),
+    }
 }
 
 /// Tool-result content on the wire. Text-only results keep the plain-string
 /// shape; with images the content becomes ordered blocks (each image carrying
-/// a base64 `source`), prepending a placeholder text block when the result
-/// has no text of its own. On a text-only model each image block is replaced
-/// in place with the issue #22 placeholder text and the all-text content keeps the
-/// plain-string shape.
-fn tool_result_content_wire(result: &ToolResultMessage, accepts_images: bool) -> Value {
+/// a base64 `source`), prepending a placeholder text block when the result has
+/// no text of its own. A result only still holds images if the model accepts
+/// them — the normalizer replaced them with placeholder text otherwise.
+fn tool_result_content_wire(result: &ToolResultMessage) -> Value {
     if !result.has_image() {
         return Value::String(result.text_content());
     }
-    if !accepts_images {
-        return Value::String(result.text_content_with_image_placeholders());
-    }
-    let mut blocks: Vec<Value> = result
-        .content
-        .iter()
-        .map(|content| match content {
-            UserContent::Text(text) => serde_json::json!({ "type": "text", "text": text.text }),
-            UserContent::Image(image) => serde_json::json!({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": image.mime_type,
-                    "data": image.data,
-                },
-            }),
-        })
-        .collect();
+    let mut blocks: Vec<Value> = result.content.iter().map(image_aware_block).collect();
     if result.text_content().is_empty() {
         blocks.insert(
             0,
@@ -421,7 +396,6 @@ fn build_request_body(
     compat: AnthropicCompat,
 ) -> MessagesRequest {
     let cache_control = cache_control(options);
-    let accepts_images = model.input.contains(&Modality::Image);
     let mut messages: Vec<Value> = Vec::new();
     for message in &context.messages {
         match message {
@@ -456,7 +430,7 @@ fn build_request_body(
                     "content": [{
                         "type": "tool_result",
                         "tool_use_id": result.tool_call_id,
-                        "content": tool_result_content_wire(result, accepts_images),
+                        "content": tool_result_content_wire(result),
                         "is_error": result.is_error,
                     }],
                 }));

@@ -59,21 +59,34 @@ and stream dispatch by model id.
 A failure delivered as a stream event carrying partial content, not a
 `Result::Err`. Only setup/config errors are `Result`s.
 
-**Modality gate**:
-The pre-flight check in stream dispatch: if the newest user message carries an
-image and the model does not declare `Modality::Image`, the stream terminates
-in-band with `ErrorKind::InvalidRequest` before any HTTP request. Historical
-images are not downgraded (v0.4 normalizer scope).
+**Context normalization** (issue #39):
+The one pass that resolves every cross-model rule, run in stream dispatch
+before either protocol adapter builds its wire payload. It takes the caller's
+`Context` and the target `Model` and yields a normalized copy plus
+diagnostics; the caller's own value is never mutated, so the same `Context` can
+be streamed against one model after another. An adapter consumes that copy and
+only translates it to its wire shape — it never re-applies a rule itself.
+_Avoid_: transform, sanitize
 
-**Tool-image downgrade**:
-The sibling of the modality gate for tool results (issue #22): on a model without
-`Modality::Image`, each image block in a tool result is replaced on the wire
-with the fixed text `(tool image omitted: model does not support images)`
-(text blocks kept, order preserved), an `ImageDowngraded` diagnostic lands on
-the resulting message, and the tool result as a whole is never dropped. On an
-image-capable model, OpenAI sends `tool` messages text-only and trails a run
-of consecutive tool results with one user message carrying every image;
-Anthropic puts `image` blocks inside the `tool_result` content.
+**Modality gate**:
+The one normalization rule that rejects rather than repairs: if the newest user
+message carries an image and the model does not declare `Modality::Image`, the
+stream terminates in-band with `ErrorKind::InvalidRequest` before any HTTP
+request. The caller is asking the model to look at something it cannot see, so
+answering the wrong question would be worse than failing.
+
+**Image downgrade**:
+The normalization rule for every image the gate does not reject — historical
+user turns and tool results alike. On a model without `Modality::Image` each
+image block is replaced in place with fixed text — `(image omitted: model does
+not support images)` for a user image, `(tool image omitted: model does not
+support images)` for a tool result (issue #22) — a consecutive run of images
+collapsing into a single placeholder. Text blocks are kept, order is preserved,
+no message is dropped, and one `ImageDowngraded` diagnostic per kind lands on
+the resulting message. On an image-capable model nothing is replaced: OpenAI
+sends `tool` messages text-only and trails a run of consecutive tool results
+with one user message carrying every image; Anthropic puts `image` blocks
+inside the `tool_result` content.
 
 **Context Snapshot** (`ContextSnapshotV1`):
 The versioned JSON persistence format for a `Context`, pinned by a golden

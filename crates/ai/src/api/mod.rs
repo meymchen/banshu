@@ -6,11 +6,16 @@
 //! [`ProtocolEventStream`] through the internal message assembler, which owns
 //! block ordering, public `content_index` assignment, cancellation, and the
 //! final [`AssistantMessage`].
+//!
+//! Cross-model rules are not an adapter's job: the context on a
+//! [`PreparedRequest`] has already been through one normalization pass for the
+//! target model, so an adapter translates what it is given verbatim.
 
 pub mod anthropic_messages;
 pub mod openai_completions;
 
 mod assembler;
+mod normalize;
 mod protocol_event;
 
 use std::sync::Arc;
@@ -27,8 +32,8 @@ use crate::options::StreamOptions;
 use crate::provider::{AnthropicCompat, OpenAiCompat};
 use crate::stream::{AssistantMessageEvent, MessageStream};
 use crate::types::{
-    ApiKind, AssistantMessage, Context, Cost, Diagnostic, DiagnosticCode, Message, Modality, Model,
-    ModelCost, StopReason, Usage, UserContent,
+    ApiKind, AssistantMessage, Context, Cost, Diagnostic, DiagnosticCode, Model, ModelCost,
+    StopReason, Usage,
 };
 
 /// A fully-resolved request handed to a [`ProtocolAdapter`].
@@ -57,7 +62,12 @@ impl PreparedRequest {
         &self.model
     }
 
-    /// The conversation context.
+    /// The conversation context, already normalized for
+    /// [`model()`](Self::model).
+    ///
+    /// Cross-model rules — the image downgrade today, more as the crate grows
+    /// — have already been applied to this copy, so an adapter only translates
+    /// it to its own wire shape. The caller's own `Context` is untouched.
     pub fn context(&self) -> &Context {
         &self.context
     }
@@ -184,14 +194,15 @@ pub(crate) fn apply_headers(
     builder
 }
 
-/// Drive a [`ProtocolAdapter`] end to end: emit `Start`, resolve auth in-band
-/// (cancellable), hand the adapter a [`PreparedRequest`], and fold its
-/// [`ProtocolEvent`]s through the shared assembler into the public event
-/// stream.
+/// Drive a [`ProtocolAdapter`] end to end: emit `Start`, normalize the context
+/// for the target model, resolve auth in-band (cancellable), hand the adapter a
+/// [`PreparedRequest`], and fold its [`ProtocolEvent`]s through the shared
+/// assembler into the public event stream.
 ///
 /// This is the single place every stream gets its guarantees: one `Start`,
-/// exactly one terminal `Done`/`Error`, the caller's cancellation token raced
-/// against every adapter await point (resolver, connect, backoff, SSE read),
+/// exactly one terminal `Done`/`Error`, one normalization pass over a copy of
+/// the caller's context, the caller's cancellation token raced against every
+/// adapter await point (resolver, connect, backoff, SSE read),
 /// and an [`ErrorKind::Protocol`] failure when an adapter's stream ends
 /// without a formal `Stop`.
 #[allow(clippy::too_many_arguments)]
@@ -222,12 +233,21 @@ pub(crate) fn drive(
         ));
         yield AssistantMessageEvent::Start;
 
-        // Modality gate: a newest-turn image on a model without declared
-        // image input fails in-band before auth resolution or any HTTP
-        // request. Downgrading historical images is normalizer scope.
-        if let Some(detail) = image_modality_violation(&model, &context) {
-            yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
-            return;
+        // The one normalization pass: cross-model rules are resolved here,
+        // once, so the adapter below sees a context it can translate
+        // verbatim. A modality violation fails in-band before auth
+        // resolution or any HTTP request.
+        let normalized = match normalize::normalize(&model, &context) {
+            Ok(normalized) => normalized,
+            Err(detail) => {
+                yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
+                return;
+            }
+        };
+        let context = normalized.context;
+        for diagnostic in normalized.diagnostics {
+            let public = assembler.apply(ProtocolEvent::Diagnostic(diagnostic));
+            debug_assert!(public.is_none(), "a diagnostic emits no public event");
         }
 
         let cancellation = options.cancellation.clone();
@@ -308,53 +328,6 @@ pub(crate) fn drive(
     };
 
     MessageStream::new(stream)
-}
-
-/// The modality gate: the newest user message carries an image while the
-/// model does not declare [`Modality::Image`] input.
-fn image_modality_violation(model: &Model, context: &Context) -> Option<String> {
-    let newest_user = context
-        .messages
-        .iter()
-        .rev()
-        .find_map(|message| match message {
-            Message::User(user) => Some(user),
-            _ => None,
-        })?;
-    (newest_user.has_image() && !model.input.contains(&Modality::Image))
-        .then(|| format!("model `{}` does not accept image input", model.id))
-}
-
-/// The tool-image downgrade report (issue #22): when the model does not declare
-/// [`Modality::Image`] input, an adapter replaces every image block in a tool
-/// result with the fixed placeholder text on the wire — the tool result is
-/// never silently dropped — and reports the downgrade here so it lands on the
-/// resulting message's diagnostics.
-pub(crate) fn tool_image_downgrade(model: &Model, context: &Context) -> Option<Diagnostic> {
-    if model.input.contains(&Modality::Image) {
-        return None;
-    }
-    let count = context
-        .messages
-        .iter()
-        .map(|message| match message {
-            Message::ToolResult(result) => result
-                .content
-                .iter()
-                .filter(|content| matches!(content, UserContent::Image(_)))
-                .count(),
-            _ => 0,
-        })
-        .sum::<usize>();
-    (count > 0).then(|| {
-        Diagnostic::new(
-            DiagnosticCode::ImageDowngraded,
-            format!(
-                "{count} tool-result image(s) omitted: model `{}` does not support images",
-                model.id
-            ),
-        )
-    })
 }
 
 /// Compute cost from token counts and per-million rates.
