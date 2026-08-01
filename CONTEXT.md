@@ -112,6 +112,16 @@ sends `tool` messages text-only and trails a run of consecutive tool results
 with one user message carrying every image; Anthropic puts `image` blocks
 inside the `tool_result` content.
 
+**Tool-history repair** (issue #41):
+The normalization rule that makes replayed history always form a legal
+request. A historical tool call whose result was never recorded receives
+exactly one synthetic error result — body `No result provided` — placed right
+after the turn that issued it; existing results are preserved and never
+duplicated. An assistant turn that ended in `Error` or `Aborted` is dropped
+from the normalized copy, and any results answering its calls go with it, so
+no result is left pointing at a call that no longer exists. A trailing
+assistant turn is left alone — its calls may still be mid-execution.
+
 **Context Snapshot** (`ContextSnapshotV1`):
 The versioned JSON persistence format for a `Context`, pinned by a golden
 fixture. The serialized shape (camelCase, `role`/`type` tags) is a published
