@@ -12,10 +12,16 @@
 //! Tool-result image downgrade rides the same pass; its per-protocol wire
 //! shapes and `ImageDowngraded` diagnostics are pinned by
 //! `tool_result_images.rs`, its run-collapsing here.
+//!
+//! Tool-history repair (issue #41) rides the pass too: the last two tests pin
+//! the synthetic `No result provided` error result an orphaned historical tool
+//! call receives on each protocol's wire, and the absence of assistant turns
+//! that ended in `Error` or `Aborted`.
 
 use banshu_ai::{
-    Context, DiagnosticCode, ErrorKind, ImageContent, Message, Modality, Model, Provider,
-    StreamOptions, TextContent, ToolResultMessage, UserContent, UserMessage,
+    AssistantContent, AssistantMessage, Context, DiagnosticCode, ErrorKind, ImageContent, Message,
+    Modality, Model, Provider, StopReason, StreamOptions, TextContent, ToolCall, ToolResultMessage,
+    UserContent, UserMessage,
 };
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -363,5 +369,164 @@ async fn one_context_serves_two_models_in_a_row() {
         request_body(&text_server).await["messages"][0]["content"],
         json!(downgraded_prompt()),
         "the text-only model sees the placeholder, not a leftover from the first run"
+    );
+}
+
+const FAILED_TURN_TEXT: &str = "partial answer from a failed turn";
+const ABORTED_TURN_TEXT: &str = "partial answer from an aborted turn";
+
+fn tool_call(id: &str, name: &str) -> AssistantContent {
+    AssistantContent::ToolCall(ToolCall {
+        id: id.into(),
+        name: name.into(),
+        arguments: json!({ "city": "Paris" }),
+        raw_arguments: None,
+    })
+}
+
+fn assistant_turn(content: Vec<AssistantContent>, stop_reason: StopReason) -> Message {
+    let mut message = AssistantMessage::from_content(content);
+    message.stop_reason = stop_reason;
+    Message::Assistant(Box::new(message))
+}
+
+fn assistant_text(text: &str) -> AssistantContent {
+    AssistantContent::Text(TextContent {
+        text: text.into(),
+        signature: None,
+    })
+}
+
+/// Incomplete history (issue #41): `call_2` never got a result, and the two
+/// trailing incomplete turns (Error / Aborted) must not be replayed at all.
+fn incomplete_tool_history() -> Context {
+    Context::new()
+        .user("weather in Paris?")
+        .with_message(assistant_turn(
+            vec![
+                tool_call("call_1", "get_weather"),
+                tool_call("call_2", "get_time"),
+            ],
+            StopReason::ToolUse,
+        ))
+        .with_message(Message::ToolResult(ToolResultMessage::text(
+            "call_1",
+            "get_weather",
+            "72F",
+        )))
+        .with_message(assistant_turn(
+            vec![assistant_text(FAILED_TURN_TEXT)],
+            StopReason::Error,
+        ))
+        .with_message(assistant_turn(
+            vec![assistant_text(ABORTED_TURN_TEXT)],
+            StopReason::Aborted,
+        ))
+        .user("and tomorrow?")
+}
+
+#[tokio::test]
+async fn openai_repairs_orphaned_tool_calls_and_skips_incomplete_turns() {
+    let server = MockServer::start().await;
+    mount_openai_sse(&server).await;
+
+    let provider = Provider::openai_compatible("deepseek", "DeepSeek", server.uri(), ["X"]);
+    provider
+        .stream(
+            &text_only_openai_model(&server),
+            &incomplete_tool_history(),
+            &options(),
+        )
+        .finish()
+        .await;
+
+    let body = request_body(&server).await;
+    let messages = body["messages"].as_array().expect("messages array");
+    assert_eq!(
+        messages.len(),
+        5,
+        "the incomplete turns are dropped, the orphan repaired: {messages:?}"
+    );
+    assert_eq!(
+        messages[1]["tool_calls"]
+            .as_array()
+            .expect("the assistant turn keeps both tool calls")
+            .len(),
+        2
+    );
+    assert_eq!(
+        messages[2],
+        json!({ "role": "tool", "tool_call_id": "call_2", "content": "No result provided" }),
+        "the orphaned call gets exactly one synthetic error result"
+    );
+    assert_eq!(
+        messages[3],
+        json!({ "role": "tool", "tool_call_id": "call_1", "content": "72F" }),
+        "the existing result is preserved, not duplicated"
+    );
+    assert_eq!(
+        messages[4],
+        json!({ "role": "user", "content": "and tomorrow?" })
+    );
+    let payload = body.to_string();
+    assert!(
+        !payload.contains(FAILED_TURN_TEXT) && !payload.contains(ABORTED_TURN_TEXT),
+        "an Error/Aborted turn never reaches the wire"
+    );
+}
+
+#[tokio::test]
+async fn anthropic_repairs_orphaned_tool_calls_and_skips_incomplete_turns() {
+    let server = MockServer::start().await;
+    mount_anthropic_sse(&server).await;
+
+    let provider = Provider::anthropic_compatible("minimax", "MiniMax", server.uri(), ["X"]);
+    provider
+        .stream(
+            &text_only_anthropic_model(&server),
+            &incomplete_tool_history(),
+            &options(),
+        )
+        .finish()
+        .await;
+
+    let body = request_body(&server).await;
+    let messages = body["messages"].as_array().expect("messages array");
+    assert_eq!(
+        messages.len(),
+        5,
+        "the incomplete turns are dropped, the orphan repaired: {messages:?}"
+    );
+    assert_eq!(
+        messages[1]["content"],
+        json!([
+            { "type": "tool_use", "id": "call_1", "name": "get_weather", "input": { "city": "Paris" } },
+            { "type": "tool_use", "id": "call_2", "name": "get_time", "input": { "city": "Paris" } },
+        ])
+    );
+    assert_eq!(
+        messages[2],
+        json!({ "role": "user", "content": [{
+            "type": "tool_result",
+            "tool_use_id": "call_2",
+            "content": "No result provided",
+            "is_error": true,
+        }] }),
+        "the orphaned call gets exactly one synthetic error result"
+    );
+    assert_eq!(
+        messages[3],
+        json!({ "role": "user", "content": [{
+            "type": "tool_result",
+            "tool_use_id": "call_1",
+            "content": "72F",
+            "is_error": false,
+        }] }),
+        "the existing result is preserved, not duplicated"
+    );
+    let payload = body.to_string();
+    assert!(
+        !payload.contains(FAILED_TURN_TEXT) && !payload.contains(ABORTED_TURN_TEXT),
+        "an Error/Aborted turn never reaches the wire"
     );
 }
