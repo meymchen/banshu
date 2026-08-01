@@ -4,7 +4,9 @@
 //! OpenAI chat completions, `image` blocks with a base64 `source` for
 //! Anthropic messages. A newest-user-message image on a model that does not
 //! declare `Modality::Image` terminates in-band with
-//! `ErrorKind::InvalidRequest` before any HTTP request is issued.
+//! `ErrorKind::InvalidRequest` before any HTTP request is issued. What happens
+//! to the *older* images the gate lets through is
+//! `tests/context_normalization.rs`.
 //!
 //! One request fixture per image-capable protocol family: `glm-4.5v`
 //! (openai-completions, zai catalog) and `k3` (anthropic-messages, kimi
