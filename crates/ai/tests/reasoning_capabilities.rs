@@ -146,7 +146,7 @@ fn reasoning_model(provider: &Provider, server: &MockServer) -> Model {
     provider
         .models()
         .into_iter()
-        .find(|model| model.reasoning.is_supported())
+        .find(|model| model.reasoning.reasons())
         .unwrap_or_else(|| panic!("`{}` should serve a reasoning model", provider.id()))
         .with_base_url(server.uri())
 }
@@ -209,7 +209,7 @@ fn a_request_expresses_no_override_or_every_effort_level() {
 fn model_metadata_lists_effort_levels_and_budget_capability() {
     // Nothing attested is the honest default: no level, budget Unknown.
     let none = ReasoningCapability::none();
-    assert!(!none.is_supported());
+    assert!(!none.reasons());
     assert_eq!(none.efforts(), []);
     assert_eq!(none.token_budget(), CapabilitySupport::Unknown);
     for effort in ReasoningEffort::ALL {
@@ -219,7 +219,7 @@ fn model_metadata_lists_effort_levels_and_budget_capability() {
     // A source that says only "this model reasons" attests the baseline
     // ladder; `xhigh` and `max` need an attestation of their own.
     let baseline = ReasoningCapability::baseline();
-    assert!(baseline.is_supported());
+    assert!(baseline.reasons());
     assert_eq!(
         baseline.efforts(),
         [
@@ -246,7 +246,7 @@ fn model_metadata_lists_effort_levels_and_budget_capability() {
 
     // A model that only knows how to be told "off" does not reason.
     let off_only = ReasoningCapability::new([ReasoningEffort::Off]);
-    assert!(!off_only.is_supported());
+    assert!(!off_only.reasons());
     assert!(off_only.supports(ReasoningEffort::Off));
 }
 
@@ -298,7 +298,7 @@ fn every_target_provider_stamps_reasoning_capabilities_onto_its_models() {
         assert!(!models.is_empty(), "`{id}` should serve models");
         let mut reasoning_models = 0;
         for model in &models {
-            if model.reasoning.is_supported() {
+            if model.reasoning.reasons() {
                 reasoning_models += 1;
                 assert_eq!(
                     model.reasoning.efforts(),
@@ -382,7 +382,7 @@ async fn a_non_reasoning_model_rejects_every_effort_before_dispatch() {
     let model = provider
         .models()
         .into_iter()
-        .find(|model| !model.reasoning.is_supported())
+        .find(|model| !model.reasoning.reasons())
         .expect("the deepseek catalog has a non-reasoning model")
         .with_base_url(server.uri());
 
@@ -429,6 +429,89 @@ async fn a_token_budget_the_model_does_not_attest_is_rejected_before_dispatch() 
         "token budget",
     )
     .await;
+}
+
+#[tokio::test]
+async fn a_model_attesting_a_level_beyond_the_baseline_is_honoured() {
+    // The metadata carries a *set of levels*, not a flag: no source in use
+    // attests `xhigh`, so no catalog model accepts it — but a caller who
+    // knows their model does says so, and the same request goes through. A
+    // boolean could not express the difference.
+    let server = MockServer::start().await;
+    mount_openai_sse(&server).await;
+
+    let provider = Provider::xiaomi();
+    let catalog = reasoning_model(&provider, &server);
+    assert!(!catalog.reasoning.supports(ReasoningEffort::XHigh));
+
+    let mut declared = catalog.clone();
+    declared.reasoning = ReasoningCapability::new(
+        ReasoningCapability::BASELINE
+            .into_iter()
+            .chain([ReasoningEffort::XHigh]),
+    );
+
+    let refused = provider
+        .stream(
+            &catalog,
+            &Context::new().user("hi"),
+            &reasoning(ReasoningEffort::XHigh),
+        )
+        .finish()
+        .await;
+    assert_eq!(refused.error_kind, Some(ErrorKind::InvalidRequest));
+
+    let honoured = provider
+        .stream(
+            &declared,
+            &Context::new().user("hi"),
+            &reasoning(ReasoningEffort::XHigh),
+        )
+        .finish()
+        .await;
+    assert_eq!(honoured.error_kind, None);
+    assert_eq!(request_bodies(&server).await.len(), 1);
+}
+
+#[tokio::test]
+async fn the_model_budget_check_is_separate_from_the_providers_format() {
+    // Kimi's declared shape *does* carry a budget, so the format check
+    // passes — this is the model-side check firing on its own, for a
+    // caller-supplied model that attests no budget support.
+    let server = MockServer::start().await;
+    mount_anthropic_sse(&server).await;
+
+    let mut model = Model::anthropic_messages("custom-thinker").with_base_url(server.uri());
+    model.provider = "kimi".into();
+    model.reasoning = ReasoningCapability::baseline();
+
+    let message = Provider::kimi()
+        .stream(
+            &model,
+            &Context::new().user("hi"),
+            &budget(ReasoningEffort::High, 4096),
+        )
+        .finish()
+        .await;
+
+    assert_eq!(message.error_kind, Some(ErrorKind::InvalidRequest));
+    assert!(
+        message
+            .error_message
+            .unwrap_or_default()
+            .contains("does not support a reasoning token budget")
+    );
+    // The same model without a budget is fine, so only the budget was refused.
+    let allowed = Provider::kimi()
+        .stream(
+            &model,
+            &Context::new().user("hi"),
+            &reasoning(ReasoningEffort::High),
+        )
+        .finish()
+        .await;
+    assert_eq!(allowed.error_kind, None);
+    assert_eq!(request_bodies(&server).await.len(), 1);
 }
 
 #[tokio::test]

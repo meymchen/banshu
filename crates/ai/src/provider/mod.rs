@@ -67,13 +67,13 @@ pub enum OpenAiReasoningFormat {
 
 impl OpenAiReasoningFormat {
     /// Whether this shape carries an explicit reasoning token budget. No
-    /// OpenAI-compatible shape does.
+    /// OpenAI-compatible shape does — effort is a string, never a token count.
     pub const fn accepts_token_budget(self) -> bool {
         false
     }
 
-    /// Whether the endpoint accepts any reasoning request field.
-    pub const fn is_supported(self) -> bool {
+    /// Whether the endpoint declares a reasoning request shape at all.
+    pub const fn is_declared(self) -> bool {
         !matches!(self, Self::Unsupported)
     }
 }
@@ -101,9 +101,53 @@ impl AnthropicReasoningFormat {
         matches!(self, Self::ThinkingBudget)
     }
 
-    /// Whether the endpoint accepts any reasoning request field.
-    pub const fn is_supported(self) -> bool {
+    /// Whether the endpoint declares a reasoning request shape at all.
+    pub const fn is_declared(self) -> bool {
         !matches!(self, Self::Unsupported)
+    }
+}
+
+/// A provider's declared reasoning request shape, reduced to the two facts
+/// that don't depend on which protocol declared it.
+///
+/// This is the only place in the crate that matches on [`ApiKind`] to pick a
+/// reasoning format: the reasoning preflight and the model-stamping path both
+/// come through here, so they can never disagree about what a provider
+/// declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeclaredReasoning {
+    /// Whether the endpoint takes any reasoning request field.
+    pub(crate) declared: bool,
+    /// Whether that field carries an explicit token budget.
+    pub(crate) token_budget: bool,
+}
+
+impl DeclaredReasoning {
+    /// What the provider declares for the protocol `api` speaks. Routing goes
+    /// by the *model's* protocol, so a mixed-protocol provider answers for
+    /// whichever side the request is headed to.
+    pub(crate) fn of(api: ApiKind, openai: OpenAiCompat, anthropic: AnthropicCompat) -> Self {
+        match api {
+            ApiKind::OpenAiCompletions => Self {
+                declared: openai.reasoning_format.is_declared(),
+                token_budget: openai.reasoning_format.accepts_token_budget(),
+            },
+            ApiKind::AnthropicMessages => Self {
+                declared: anthropic.reasoning_format.is_declared(),
+                token_budget: anthropic.reasoning_format.accepts_token_budget(),
+            },
+        }
+    }
+
+    /// The budget capability stamped onto the models a provider serves. A
+    /// property of the endpoint, so it is attested either way — never left
+    /// `Unknown`.
+    pub(crate) fn token_budget_support(self) -> CapabilitySupport {
+        if self.token_budget {
+            CapabilitySupport::Supported
+        } else {
+            CapabilitySupport::Unsupported
+        }
     }
 }
 
@@ -415,23 +459,9 @@ impl Provider {
 
     /// Whether the declared reasoning request shape of `api` carries an
     /// explicit token budget, as the [`CapabilitySupport`] stamped onto the
-    /// models this provider serves. This is a property of the endpoint, so it
-    /// is attested either way — never left `Unknown`.
+    /// models this provider serves.
     fn reasoning_token_budget(&self, api: ApiKind) -> CapabilitySupport {
-        let accepts = match api {
-            ApiKind::OpenAiCompletions => {
-                self.openai_compat.reasoning_format.accepts_token_budget()
-            }
-            ApiKind::AnthropicMessages => self
-                .anthropic_compat
-                .reasoning_format
-                .accepts_token_budget(),
-        };
-        if accepts {
-            CapabilitySupport::Supported
-        } else {
-            CapabilitySupport::Unsupported
-        }
+        DeclaredReasoning::of(api, self.openai_compat, self.anthropic_compat).token_budget_support()
     }
 
     /// The provider's models: caller-supplied models first, then the bundled

@@ -12,32 +12,8 @@
 //! [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) instead and
 //! names the levels that would have worked.
 
-use crate::provider::{AnthropicCompat, OpenAiCompat};
-use crate::types::{ApiKind, CapabilitySupport, Model, ReasoningOptions};
-
-/// What the provider's declared request shape can carry, reduced to the two
-/// facts the preflight needs from it.
-struct DeclaredFormat {
-    /// Whether the endpoint accepts any reasoning request field at all.
-    supported: bool,
-    /// Whether it carries an explicit reasoning token budget.
-    token_budget: bool,
-}
-
-impl DeclaredFormat {
-    fn of(api: ApiKind, openai: OpenAiCompat, anthropic: AnthropicCompat) -> Self {
-        match api {
-            ApiKind::OpenAiCompletions => Self {
-                supported: openai.reasoning_format.is_supported(),
-                token_budget: openai.reasoning_format.accepts_token_budget(),
-            },
-            ApiKind::AnthropicMessages => Self {
-                supported: anthropic.reasoning_format.is_supported(),
-                token_budget: anthropic.reasoning_format.accepts_token_budget(),
-            },
-        }
-    }
-}
+use crate::provider::{AnthropicCompat, DeclaredReasoning, OpenAiCompat};
+use crate::types::{CapabilitySupport, Model, ReasoningOptions};
 
 /// Check `reasoning` against the target model and provider. `Ok(())` means the
 /// request can be honoured — including the common case of no reasoning option
@@ -53,9 +29,11 @@ pub(crate) fn validate(
         return Ok(());
     };
     let effort = reasoning.effort;
-    let format = DeclaredFormat::of(model.api, openai, anthropic);
+    // Routing goes by the model's protocol, so a mixed-protocol provider is
+    // judged on the side this request is headed to.
+    let format = DeclaredReasoning::of(model.api, openai, anthropic);
 
-    if !format.supported {
+    if !format.declared {
         return Err(format!(
             "provider `{}` declares no reasoning request format for the `{}` protocol, \
              so effort `{effort}` cannot be requested",
@@ -101,11 +79,15 @@ pub(crate) fn validate(
     Ok(())
 }
 
+/// Unit coverage for what `tests/reasoning_capabilities.rs` cannot reach
+/// end-to-end: the exact rejection details, and the protocol-routing choice a
+/// mixed-protocol provider forces. Every rejection *path* is also pinned
+/// against a mock server there; these pin the words and the wiring.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::provider::{AnthropicReasoningFormat, OpenAiReasoningFormat};
-    use crate::types::{ReasoningCapability, ReasoningEffort};
+    use crate::types::{ApiKind, ReasoningCapability, ReasoningEffort};
 
     fn openai_format(format: OpenAiReasoningFormat) -> OpenAiCompat {
         OpenAiCompat {
@@ -154,33 +136,10 @@ mod tests {
     }
 
     #[test]
-    fn an_attested_level_is_honoured() {
-        let model = model(ReasoningCapability::baseline());
-        for effort in ReasoningCapability::BASELINE {
-            assert_eq!(check(&model, Some(&ReasoningOptions::new(effort))), Ok(()));
-        }
-    }
-
-    #[test]
-    fn a_provider_without_a_declared_format_rejects_every_level() {
-        let model = model(ReasoningCapability::baseline());
-        for effort in ReasoningEffort::ALL {
-            let error = validate(
-                &model,
-                Some(&ReasoningOptions::new(effort)),
-                OpenAiCompat::default(),
-                AnthropicCompat::default(),
-            )
-            .expect_err("an undeclared format cannot carry a reasoning request");
-            assert!(error.contains("no reasoning request format"), "{error}");
-        }
-    }
-
-    #[test]
-    fn an_unattested_level_is_rejected_and_names_the_attested_ones() {
-        let model = model(ReasoningCapability::baseline());
+    fn a_rejection_names_the_levels_that_would_have_worked() {
+        let attested = model(ReasoningCapability::baseline());
         for effort in [ReasoningEffort::XHigh, ReasoningEffort::Max] {
-            let error = check(&model, Some(&ReasoningOptions::new(effort)))
+            let error = check(&attested, Some(&ReasoningOptions::new(effort)))
                 .expect_err("the baseline ladder stops at `high`");
             assert!(error.contains(effort.as_str()), "{error}");
             assert!(
@@ -188,16 +147,12 @@ mod tests {
                 "the caller should learn what would have worked: {error}"
             );
         }
-    }
 
-    #[test]
-    fn a_model_attesting_nothing_rejects_every_level() {
-        let model = model(ReasoningCapability::none());
-        for effort in ReasoningEffort::ALL {
-            let error = check(&model, Some(&ReasoningOptions::new(effort)))
-                .expect_err("nothing attested means nothing accepted");
-            assert!(error.contains("attested levels: none"), "{error}");
-        }
+        // A model attesting nothing says so rather than printing an empty list.
+        let nothing = model(ReasoningCapability::none());
+        let error = check(&nothing, Some(&ReasoningOptions::new(ReasoningEffort::Low)))
+            .expect_err("nothing attested means nothing accepted");
+        assert!(error.contains("attested levels: none"), "{error}");
     }
 
     #[test]

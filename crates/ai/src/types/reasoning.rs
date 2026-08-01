@@ -200,7 +200,11 @@ impl ReasoningCapability {
 
     /// Whether the model reasons at all — that is, attests any level above
     /// [`ReasoningEffort::Off`]. A model that can only be told "off" does not.
-    pub fn is_supported(&self) -> bool {
+    ///
+    /// Deliberately not named `is_supported`: unlike
+    /// [`CapabilitySupport::is_supported`] this asks about the *ladder*, and a
+    /// capability holding only `Off` is attested yet does not reason.
+    pub fn reasons(&self) -> bool {
         self.efforts
             .iter()
             .any(|effort| *effort > ReasoningEffort::Off)
