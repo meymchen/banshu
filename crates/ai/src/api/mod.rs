@@ -65,9 +65,10 @@ impl PreparedRequest {
     /// The conversation context, already normalized for
     /// [`model()`](Self::model).
     ///
-    /// Cross-model rules — the image downgrade today, more as the crate grows
-    /// — have already been applied to this copy, so an adapter only translates
-    /// it to its own wire shape. The caller's own `Context` is untouched.
+    /// Cross-model rules — image downgrade, reasoning downgrade, tool-call id
+    /// rewrite, more as the crate grows — have already been applied to this
+    /// copy, so an adapter only translates it to its own wire shape. The
+    /// caller's own `Context` is untouched.
     pub fn context(&self) -> &Context {
         &self.context
     }

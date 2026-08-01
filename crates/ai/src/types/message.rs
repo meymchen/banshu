@@ -37,6 +37,11 @@ pub enum DiagnosticCode {
     ProtocolViolation,
     /// An image was replaced or omitted for compatibility.
     ImageDowngraded,
+    /// Reasoning state was converted or omitted: it is private to the
+    /// provider, API, and model id that produced it.
+    ReasoningDowngraded,
+    /// A tool-call or tool-result id was rewritten to `^[a-zA-Z0-9_-]{1,64}$`.
+    ToolCallIdRewritten,
     /// A diagnostic that does not fit a more specific category.
     Other,
 }
