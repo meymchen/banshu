@@ -3,7 +3,9 @@
 //! Signed thinking round-trips as `thinking` blocks with their signature;
 //! signatureless thinking is downgraded to a text block unless the provider
 //! declares `allow_empty_signature`; `redacted_thinking` blocks round-trip
-//! verbatim via their opaque payload.
+//! verbatim via their opaque payload. Signatures only survive replay onto the
+//! exact provider, API, and model id stamped on the history message
+//! (issue #40), so these fixtures stamp same-model provenance.
 
 use banshu_ai::{
     AnthropicCompat, AssistantContent, AssistantMessage, Context, Message, Model, Provider,
@@ -42,7 +44,9 @@ fn provider(server: &MockServer) -> Provider {
 }
 
 fn model(server: &MockServer) -> Model {
-    Model::anthropic_messages("k2-thinking").with_base_url(server.uri())
+    let mut model = Model::anthropic_messages("k2-thinking").with_base_url(server.uri());
+    model.provider = "kimi".into();
+    model
 }
 
 fn options() -> StreamOptions {
@@ -53,11 +57,15 @@ fn options() -> StreamOptions {
 }
 
 fn history(assistant_content: Vec<AssistantContent>) -> Context {
+    // Stamp the producing provider/API/model, as a real stream would: only
+    // same-provenance signatures survive normalization (issue #40).
+    let mut message = AssistantMessage::from_content(assistant_content);
+    message.api = "anthropic-messages".into();
+    message.provider = "kimi".into();
+    message.model = "k2-thinking".into();
     Context::new()
         .user("2+2?")
-        .with_message(Message::Assistant(Box::new(
-            AssistantMessage::from_content(assistant_content),
-        )))
+        .with_message(Message::Assistant(Box::new(message)))
         .user("And 3+3?")
 }
 
