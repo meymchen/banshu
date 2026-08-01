@@ -5,7 +5,9 @@
 //! block's signature; replay writes the joined thinking back under that same
 //! field. DeepSeek additionally requires `reasoning_content` (`""` when the
 //! turn produced no thinking) on every replayed assistant message while a
-//! reasoning model is active.
+//! reasoning model is active. Signatures only survive replay onto the exact
+//! provider, API, and model id stamped on the history message (issue #40),
+//! so replay fixtures stamp same-model provenance.
 
 use banshu_ai::{
     AssistantContent, AssistantMessage, Context, Message, Model, OpenAiCompat, Provider,
@@ -41,7 +43,23 @@ fn options() -> StreamOptions {
 }
 
 fn model(server: &MockServer) -> Model {
-    Model::openai_completions("test-model").with_base_url(server.uri())
+    let mut model = Model::openai_completions("test-model").with_base_url(server.uri());
+    model.provider = "custom".into();
+    model
+}
+
+/// Assistant history stamped with the producing provider/API/model, as a real
+/// stream would stamp it: only same-provenance signatures survive
+/// normalization (issue #40).
+fn history(assistant_content: Vec<AssistantContent>) -> Context {
+    let mut message = AssistantMessage::from_content(assistant_content);
+    message.api = "openai-completions".into();
+    message.provider = "custom".into();
+    message.model = "test-model".into();
+    Context::new()
+        .user("2+2?")
+        .with_message(Message::Assistant(Box::new(message)))
+        .user("And 3+3?")
 }
 
 fn thinking(text: &str, signature: Option<&str>) -> AssistantContent {
@@ -100,15 +118,10 @@ async fn replays_thinking_under_its_source_field() {
     )
     .await;
 
-    let context = Context::new()
-        .user("2+2?")
-        .with_message(Message::Assistant(Box::new(
-            AssistantMessage::from_content(vec![
-                thinking("Let me think.", Some("reasoning_content")),
-                text("The answer is 4."),
-            ]),
-        )))
-        .user("And 3+3?");
+    let context = history(vec![
+        thinking("Let me think.", Some("reasoning_content")),
+        text("The answer is 4."),
+    ]);
     let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"]);
     provider
         .stream(&model(&server), &context, &options())
@@ -130,15 +143,10 @@ async fn drops_signatureless_thinking_on_replay() {
     )
     .await;
 
-    let context = Context::new()
-        .user("2+2?")
-        .with_message(Message::Assistant(Box::new(
-            AssistantMessage::from_content(vec![
-                thinking("Let me think.", None),
-                text("The answer is 4."),
-            ]),
-        )))
-        .user("And 3+3?");
+    let context = history(vec![
+        thinking("Let me think.", None),
+        text("The answer is 4."),
+    ]);
     let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"]);
     provider
         .stream(&model(&server), &context, &options())

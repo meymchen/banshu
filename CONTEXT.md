@@ -68,6 +68,27 @@ be streamed against one model after another. An adapter consumes that copy and
 only translates it to its wire shape — it never re-applies a rule itself.
 _Avoid_: transform, sanitize
 
+**Reasoning downgrade** (issue #40):
+The normalization rule for provider-private reasoning state. A thinking
+block's opaque signature — and a text block's `textSignature` — replays
+verbatim only onto the exact provider, API, and model id that produced it
+(the message's `responseModel` when set, else `model`). Replayed anywhere
+else, non-empty ordinary thinking becomes a plain text block, empty or
+redacted thinking is omitted, and every signature is dropped; one
+`ReasoningDowngraded` diagnostic reports the counts. Provenance that is
+missing or differs in any one of the three fields counts as "anywhere else".
+_Avoid_: reasoning replay, signature passthrough
+
+**Tool-call id rewrite** (issue #40):
+The normalization rule for tool-call identities. Any `ToolCall.id` or
+`ToolResultMessage.toolCallId` not matching `^[a-zA-Z0-9_-]{1,64}$` — the
+Anthropic tool-use pattern, which the OpenAI side also satisfies — is
+rewritten deterministically: invalid characters become `_`, the result is
+truncated, and a stable FNV-1a hash of the original id is appended so
+distinct invalid ids stay distinct. The rewrite is a pure function of the
+original id, so a tool result always tracks its call; one
+`ToolCallIdRewritten` diagnostic reports the count.
+
 **Modality gate**:
 The one normalization rule that rejects rather than repairs: if the newest user
 message carries an image and the model does not declare `Modality::Image`, the
