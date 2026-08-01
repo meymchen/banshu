@@ -158,42 +158,48 @@ fn repair_tool_history(context: &mut Context) {
         .flatten()
         .collect();
 
-    let last = context.messages.len().saturating_sub(1);
+    // Filter first, then repair: the trailing-turn exemption must be judged
+    // against what survives, because dropping a final Error/Aborted turn can
+    // make an earlier assistant turn the new trailing one.
     let mut messages = Vec::with_capacity(context.messages.len());
-    for (index, message) in context.messages.drain(..).enumerate() {
+    for message in context.messages.drain(..) {
         match message {
             Message::Assistant(assistant)
                 if matches!(
                     assistant.stop_reason,
                     StopReason::Error | StopReason::Aborted
                 ) => {}
-            Message::Assistant(assistant) => {
-                let synthetic: Vec<Message> = if index == last {
-                    Vec::new()
-                } else {
-                    assistant
-                        .content
-                        .iter()
-                        .filter_map(|content| match content {
-                            AssistantContent::ToolCall(call) if !answered.contains(&call.id) => {
-                                Some(Message::ToolResult(ToolResultMessage::error_text(
-                                    call.id.clone(),
-                                    call.name.clone(),
-                                    NO_RESULT_PROVIDED,
-                                )))
-                            }
-                            _ => None,
-                        })
-                        .collect()
-                };
-                messages.push(Message::Assistant(assistant));
-                messages.extend(synthetic);
-            }
             Message::ToolResult(result) if dropped_calls.contains(&result.tool_call_id) => {}
             other => messages.push(other),
         }
     }
-    context.messages = messages;
+
+    let trailing = messages.len().saturating_sub(1);
+    let mut repaired = Vec::with_capacity(messages.len());
+    for (index, message) in messages.into_iter().enumerate() {
+        match message {
+            Message::Assistant(assistant) if index != trailing => {
+                let synthetic: Vec<Message> = assistant
+                    .content
+                    .iter()
+                    .filter_map(|content| match content {
+                        AssistantContent::ToolCall(call) if !answered.contains(&call.id) => {
+                            Some(Message::ToolResult(ToolResultMessage::error_text(
+                                call.id.clone(),
+                                call.name.clone(),
+                                NO_RESULT_PROVIDED,
+                            )))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                repaired.push(Message::Assistant(assistant));
+                repaired.extend(synthetic);
+            }
+            other => repaired.push(other),
+        }
+    }
+    context.messages = repaired;
 }
 
 /// Reasoning downgrade: reasoning state is private to the exact provider,
@@ -674,6 +680,31 @@ mod tests {
         assert_eq!(
             normalized.context, context,
             "a trailing turn may be mid-execution: no synthetic result is invented for it"
+        );
+    }
+
+    #[test]
+    fn a_dropped_trailing_failure_leaves_the_new_trailing_turn_alone() {
+        let context = Context::new()
+            .user("weather in Paris?")
+            .with_message(assistant(
+                vec![tool_call("call_1", "get_weather")],
+                StopReason::ToolUse,
+            ))
+            .with_message(assistant(
+                vec![assistant_text("something broke")],
+                StopReason::Error,
+            ));
+
+        let normalized = normalize(&image_model(), &context).expect("repair never fails");
+
+        let messages = &normalized.context.messages;
+        assert!(
+            matches!(
+                messages.as_slice(),
+                [Message::User(_), Message::Assistant(_)]
+            ),
+            "the error turn is dropped and the now-trailing assistant turn keeps its unanswered call: {messages:?}"
         );
     }
 
