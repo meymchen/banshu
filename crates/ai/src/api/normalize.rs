@@ -16,10 +16,17 @@
 //!   results alike, is replaced in place with fixed placeholder text, with a
 //!   consecutive run collapsing into a single placeholder. Order is preserved
 //!   and no message is dropped.
+//! - **Tool-history repair** (issue #41) — a historical tool call whose result
+//!   was never recorded receives exactly one synthetic error result (`No result
+//!   provided`), placed right after the turn that issued the call, and an
+//!   assistant turn that ended in `Error` or `Aborted` is dropped together with
+//!   any results answering its calls. Replay always forms a legal request.
+
+use std::collections::HashSet;
 
 use crate::types::{
-    Context, Diagnostic, DiagnosticCode, Message, Modality, Model, TextContent, UserContent,
-    UserMessage,
+    AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Modality, Model, StopReason,
+    TextContent, ToolResultMessage, UserContent, UserMessage,
 };
 
 /// The fixed text replacing a user image the target model cannot see.
@@ -29,6 +36,10 @@ const USER_IMAGE_OMITTED_PLACEHOLDER: &str = "(image omitted: model does not sup
 /// (issue #22) — distinct from the user placeholder so the model can tell whose
 /// image went missing.
 const TOOL_IMAGE_OMITTED_PLACEHOLDER: &str = "(tool image omitted: model does not support images)";
+
+/// The body of the synthetic error result standing in for a tool call whose
+/// real result was never recorded (issue #41).
+const NO_RESULT_PROVIDED: &str = "No result provided";
 
 /// A normalized [`Context`] copy and the diagnostics its rules produced.
 #[derive(Debug)]
@@ -49,16 +60,19 @@ pub(crate) fn normalize(model: &Model, context: &Context) -> Result<Normalized, 
     if !accepts_images && newest_user_message(context).is_some_and(|user| user.has_image()) {
         return Err(format!("model `{}` does not accept image input", model.id));
     }
+
+    let mut context = context.clone();
+    repair_tool_history(&mut context);
+
     if accepts_images {
         return Ok(Normalized {
-            context: context.clone(),
+            context,
             diagnostics: Vec::new(),
         });
     }
 
     // Past the gate, the newest user message is known image-free, so every
     // remaining user image is by definition historical.
-    let mut context = context.clone();
     let mut user_images = 0;
     let mut tool_images = 0;
     for message in &mut context.messages {
@@ -91,6 +105,86 @@ pub(crate) fn normalize(model: &Model, context: &Context) -> Result<Normalized, 
         context,
         diagnostics,
     })
+}
+
+/// Repair incomplete historical tool turns (issue #41): every historical tool
+/// call whose result was never recorded receives exactly one synthetic error
+/// result, placed right after the turn that issued it so the following run of
+/// tool results stays consecutive; an assistant turn that ended in `Error` or
+/// `Aborted` is dropped, and any results answering its calls go with it so no
+/// result is left pointing at a call that no longer exists. A trailing
+/// assistant turn is left alone — its calls may still be mid-execution, so
+/// they are not yet historical.
+fn repair_tool_history(context: &mut Context) {
+    let answered: HashSet<String> = context
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::ToolResult(result) => Some(result.tool_call_id.clone()),
+            _ => None,
+        })
+        .collect();
+    let dropped_calls: HashSet<String> = context
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Assistant(assistant)
+                if matches!(
+                    assistant.stop_reason,
+                    StopReason::Error | StopReason::Aborted
+                ) =>
+            {
+                Some(
+                    assistant
+                        .content
+                        .iter()
+                        .filter_map(|content| match content {
+                            AssistantContent::ToolCall(call) => Some(call.id.clone()),
+                            _ => None,
+                        }),
+                )
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+
+    let last = context.messages.len().saturating_sub(1);
+    let mut messages = Vec::with_capacity(context.messages.len());
+    for (index, message) in context.messages.drain(..).enumerate() {
+        match message {
+            Message::Assistant(assistant)
+                if matches!(
+                    assistant.stop_reason,
+                    StopReason::Error | StopReason::Aborted
+                ) => {}
+            Message::Assistant(assistant) => {
+                let synthetic: Vec<Message> = if index == last {
+                    Vec::new()
+                } else {
+                    assistant
+                        .content
+                        .iter()
+                        .filter_map(|content| match content {
+                            AssistantContent::ToolCall(call) if !answered.contains(&call.id) => {
+                                Some(Message::ToolResult(ToolResultMessage::error_text(
+                                    call.id.clone(),
+                                    call.name.clone(),
+                                    NO_RESULT_PROVIDED,
+                                )))
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                messages.push(Message::Assistant(assistant));
+                messages.extend(synthetic);
+            }
+            Message::ToolResult(result) if dropped_calls.contains(&result.tool_call_id) => {}
+            other => messages.push(other),
+        }
+    }
+    context.messages = messages;
 }
 
 /// The last user turn — the one the model is being asked to answer.
@@ -149,7 +243,10 @@ mod tests {
     //! lives in `tests/context_normalization.rs`.
 
     use super::*;
-    use crate::types::{ImageContent, Message, ToolResultMessage, UserMessage};
+    use crate::types::{
+        AssistantContent, AssistantMessage, ImageContent, Message, StopReason, ToolCall,
+        ToolResultMessage, UserMessage,
+    };
 
     fn text(text: &str) -> UserContent {
         UserContent::Text(TextContent {
@@ -178,6 +275,28 @@ mod tests {
 
     fn text_only_model() -> Model {
         Model::openai_completions("text-model")
+    }
+
+    fn tool_call(id: &str, name: &str) -> AssistantContent {
+        AssistantContent::ToolCall(ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: serde_json::json!({}),
+            raw_arguments: None,
+        })
+    }
+
+    fn assistant(content: Vec<AssistantContent>, stop_reason: StopReason) -> Message {
+        let mut message = AssistantMessage::from_content(content);
+        message.stop_reason = stop_reason;
+        Message::Assistant(Box::new(message))
+    }
+
+    fn assistant_text(text: &str) -> AssistantContent {
+        AssistantContent::Text(TextContent {
+            text: text.into(),
+            signature: None,
+        })
     }
 
     fn image_model() -> Model {
@@ -278,5 +397,139 @@ mod tests {
         let normalized = normalize(&text_only_model(), &context).expect("no images at all");
         assert_eq!(normalized.context, context);
         assert!(normalized.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn an_orphaned_tool_call_gets_exactly_one_synthetic_error_result() {
+        let context = Context::new()
+            .user("weather in Paris?")
+            .with_message(assistant(
+                vec![
+                    tool_call("call_1", "get_weather"),
+                    tool_call("call_2", "get_time"),
+                ],
+                StopReason::ToolUse,
+            ))
+            .with_message(Message::ToolResult(ToolResultMessage::text(
+                "call_1",
+                "get_weather",
+                "72F",
+            )))
+            .user("and tomorrow?");
+        let before = context.clone();
+
+        let normalized = normalize(&image_model(), &context).expect("repair never fails");
+
+        let messages = &normalized.context.messages;
+        assert_eq!(messages.len(), 5, "one synthetic result was inserted");
+        let Message::ToolResult(synthetic) = &messages[2] else {
+            panic!("the synthetic result follows the assistant turn: {messages:?}")
+        };
+        assert_eq!(synthetic.tool_call_id, "call_2");
+        assert_eq!(synthetic.tool_name, "get_time");
+        assert!(synthetic.is_error);
+        assert_eq!(synthetic.content, [text("No result provided")]);
+        let Message::ToolResult(existing) = &messages[3] else {
+            panic!("the existing result keeps its place: {messages:?}")
+        };
+        assert_eq!(existing.tool_call_id, "call_1");
+        assert!(!existing.is_error);
+        assert_eq!(existing.content, [text("72F")]);
+        assert_eq!(context, before, "the caller's context is untouched");
+    }
+
+    #[test]
+    fn failed_and_aborted_turns_are_dropped_with_their_results() {
+        let context = Context::new()
+            .user("hi")
+            .with_message(assistant(
+                vec![tool_call("call_1", "get_weather")],
+                StopReason::ToolUse,
+            ))
+            .with_message(Message::ToolResult(ToolResultMessage::text(
+                "call_1",
+                "get_weather",
+                "72F",
+            )))
+            .with_message(assistant(
+                vec![assistant_text("partial"), tool_call("call_2", "get_time")],
+                StopReason::Error,
+            ))
+            .with_message(Message::ToolResult(ToolResultMessage::text(
+                "call_2", "get_time", "noon",
+            )))
+            .with_message(assistant(
+                vec![assistant_text("cut off")],
+                StopReason::Aborted,
+            ))
+            .user("again");
+
+        let normalized = normalize(&image_model(), &context).expect("repair never fails");
+
+        let messages = &normalized.context.messages;
+        assert_eq!(
+            messages.len(),
+            4,
+            "failed/aborted turns and the results answering them are gone: {messages:?}"
+        );
+        assert!(
+            messages.iter().all(|message| match message {
+                Message::Assistant(assistant) => assistant.stop_reason == StopReason::ToolUse,
+                Message::ToolResult(result) => result.tool_call_id == "call_1",
+                Message::User(_) => true,
+            }),
+            "no trace of the dropped turns remains: {messages:?}"
+        );
+        assert!(
+            matches!(
+                messages.as_slice(),
+                [
+                    Message::User(_),
+                    Message::Assistant(_),
+                    Message::ToolResult(_),
+                    Message::User(_)
+                ]
+            ),
+            "only the healthy turns remain, in order: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_trailing_assistant_turn_is_not_yet_history() {
+        let context = Context::new()
+            .user("weather in Paris?")
+            .with_message(assistant(
+                vec![tool_call("call_1", "get_weather")],
+                StopReason::ToolUse,
+            ));
+
+        let normalized = normalize(&image_model(), &context).expect("repair never fails");
+
+        assert_eq!(
+            normalized.context, context,
+            "a trailing turn may be mid-execution: no synthetic result is invented for it"
+        );
+    }
+
+    #[test]
+    fn repair_is_idempotent() {
+        let context = Context::new()
+            .with_message(assistant(
+                vec![tool_call("call_1", "get_weather")],
+                StopReason::ToolUse,
+            ))
+            .user("next");
+
+        let once = normalize(&image_model(), &context).expect("repair");
+        let twice = normalize(&image_model(), &once.context).expect("repair again");
+
+        let results = twice
+            .context
+            .messages
+            .iter()
+            .filter(|message| matches!(message, Message::ToolResult(_)))
+            .count();
+        assert_eq!(results, 1, "the synthetic result is never duplicated");
+        assert_eq!(twice.context.messages.len(), once.context.messages.len());
     }
 }
