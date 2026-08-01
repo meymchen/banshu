@@ -45,6 +45,39 @@ agent loop. The bundled Catalog is generated to contain exactly these
 including `Unknown` Probe models for explicit selection.
 _Avoid_: supported models, tool models
 
+**Reasoning Effort** (`ReasoningEffort`):
+The unified ladder a request asks for — `off`, `minimal`, `low`, `medium`,
+`high`, `xhigh`, `max`. `off` is an explicit request to disable reasoning,
+which a provider sends as its own disabling value; the *absence* of a request
+is `StreamOptions::reasoning == None`, which leaves the payload untouched.
+_Avoid_: thinking level, reasoning level
+
+**Reasoning Capability** (`ReasoningCapability`):
+What a model's metadata source attests: the effort levels it accepts and
+whether an explicit token budget may be requested. Replaces a plain
+"supports reasoning" boolean so an unattested level is refused rather than
+quietly becoming a different one. A source that says only "this model reasons"
+attests the baseline ladder `off`…`high`; `xhigh` and `max` need an
+attestation of their own, and Probe models attest nothing.
+
+**Reasoning Request Format**
+(`OpenAiReasoningFormat` / `AnthropicReasoningFormat`):
+The wire shape a provider *declares* its endpoint accepts for reasoning —
+never inferred from a base URL or a model id. It also decides the
+token-budget capability stamped onto the models that provider serves. A
+provider that declares none refuses every reasoning request instead of
+sending a field the endpoint would ignore.
+
+**Reasoning preflight** (issue #42):
+The check in stream dispatch, ahead of context normalization and auth, that a
+reasoning request can be honoured by both the model's Reasoning Capability and
+the provider's Reasoning Request Format. It reads nothing but the options, the
+model, and the provider, so an impossible request terminates in-band with
+`ErrorKind::InvalidRequest` before any HTTP request. Like the Modality gate it
+rejects rather than repairs — clamping to a level the caller did not ask for
+would answer a different question.
+_Avoid_: reasoning clamp, effort fallback
+
 ### Core (established)
 
 **Provider**:

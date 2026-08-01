@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::{ProviderHeaders, RedactedHeaders, is_sensitive_header_name};
+use crate::types::ReasoningOptions;
 
 struct RedactedMetadata<'a>(&'a BTreeMap<String, serde_json::Value>);
 
@@ -77,6 +78,25 @@ pub struct StreamOptions {
     pub max_retries: Option<u32>,
     /// Prompt-cache retention preference. `None` uses the provider default.
     pub cache_retention: Option<CacheRetention>,
+    /// How much reasoning to ask the model for.
+    ///
+    /// `None` — the default — is *no override*: the request carries no
+    /// reasoning field and its payload is byte-for-byte what it was before
+    /// this option existed. `Some(..)` is an explicit request, checked before
+    /// dispatch against the levels the model attests
+    /// ([`Model::reasoning`](crate::Model::reasoning)) and the request shape
+    /// the provider declares
+    /// ([`OpenAiCompat::reasoning_format`](crate::OpenAiCompat::reasoning_format)
+    /// /
+    /// [`AnthropicCompat::reasoning_format`](crate::AnthropicCompat::reasoning_format)).
+    /// A request neither can honour terminates in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request — it is never quietly clamped onto a level the caller
+    /// did not ask for.
+    ///
+    /// Note that [`ReasoningOptions::effort`] `Off` is not the same as `None`:
+    /// `Off` asks the provider to actively disable reasoning.
+    pub reasoning: Option<ReasoningOptions>,
     /// Stable conversation identifier used by providers that support
     /// cache-routing keys or session-affinity headers.
     pub session_id: Option<String>,
@@ -111,6 +131,7 @@ impl std::fmt::Debug for StreamOptions {
             .field("timeout", &self.timeout)
             .field("max_retries", &self.max_retries)
             .field("cache_retention", &self.cache_retention)
+            .field("reasoning", &self.reasoning)
             .field("session_id", &self.session_id)
             .field("headers", &RedactedHeaders(&self.headers))
             .field("metadata", &RedactedMetadata(&self.metadata))

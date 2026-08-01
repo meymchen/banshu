@@ -501,7 +501,7 @@ fn build_request_body(
                     wire[field] = Value::String(joined.join("\n"));
                 }
                 if compat.requires_reasoning_content_on_assistant_messages
-                    && model.reasoning
+                    && model.reasoning.is_supported()
                     && wire.get("reasoning_content").is_none()
                 {
                     wire["reasoning_content"] = Value::String(String::new());

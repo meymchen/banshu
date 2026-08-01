@@ -64,7 +64,7 @@ async fn refresh_overrides_and_appends_models_dev_entries() {
 
     // A new id is appended with full metadata, stamped like a catalog model.
     let vnext = models.get("deepseek", "deepseek-vnext").expect("appended");
-    assert!(vnext.reasoning);
+    assert!(vnext.reasoning.is_supported());
     assert_eq!(vnext.provider, "deepseek");
     assert_eq!(vnext.base_url, "https://api.deepseek.com");
 
@@ -108,7 +108,7 @@ async fn openai_probe_appends_unknown_ids_as_zero_metadata_models() {
     assert_eq!(found.base_url, server.uri());
     assert_eq!(found.input, vec![Modality::Text]);
     // Zero-means-unknown: nothing is guessed for a bare id.
-    assert!(!found.reasoning);
+    assert!(!found.reasoning.is_supported());
     assert_eq!(found.cost.input, 0.0);
     assert_eq!(found.context_window, 0);
     assert_eq!(found.max_tokens, 0);
@@ -291,6 +291,10 @@ async fn provider_level_refresh_works_without_a_registry() {
     assert_eq!(entry.probe, RefreshOutcome::Refreshed);
 
     let models = provider.models();
-    assert!(models.iter().any(|m| m.id == "solo-pro" && m.reasoning));
+    assert!(
+        models
+            .iter()
+            .any(|m| m.id == "solo-pro" && m.reasoning.is_supported())
+    );
     assert!(models.iter().any(|m| m.id == "solo-x"));
 }

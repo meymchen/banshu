@@ -18,7 +18,7 @@ use crate::auth::{Auth, AuthResolver, ProviderHeaders};
 use crate::discovery::{RefreshEntry, RefreshOutcome};
 use crate::options::StreamOptions;
 use crate::stream::MessageStream;
-use crate::types::{ApiKind, Context, Model};
+use crate::types::{ApiKind, CapabilitySupport, Context, Model};
 
 /// Request-side prompt-cache controls supported by an OpenAI-compatible
 /// provider.
@@ -36,6 +36,77 @@ pub enum OpenAiPromptCaching {
     SessionAffinityHeaders,
 }
 
+/// The reasoning request shape an OpenAI-compatible endpoint accepts.
+///
+/// Every provider states its own — nothing is inferred from a base URL or a
+/// model id. A request the declared shape cannot carry is refused before
+/// dispatch rather than sent in a shape the endpoint would ignore or reject.
+///
+/// The shapes named here are the ones banshu's target providers use; no claim
+/// is made about any other endpoint that happens to speak
+/// `POST /chat/completions`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenAiReasoningFormat {
+    /// The endpoint takes no reasoning request field at all. Any reasoning
+    /// request against this provider is refused; a model that reasons on its
+    /// own still streams its thinking back. The default, because an
+    /// unconfigured endpoint attests nothing.
+    #[default]
+    Unsupported,
+    /// OpenAI's top-level `reasoning_effort: "<effort>"` string.
+    ReasoningEffort,
+    /// DeepSeek's `thinking: { "type": "enabled" | "disabled" }` toggle
+    /// alongside a top-level `reasoning_effort`.
+    DeepSeekThinking,
+    /// Z.AI's `thinking: { "type": "enabled" | "disabled" }` toggle. Binary:
+    /// the endpoint carries no graded effort, so any level above `Off` reads
+    /// as "enabled".
+    ZaiThinking,
+}
+
+impl OpenAiReasoningFormat {
+    /// Whether this shape carries an explicit reasoning token budget. No
+    /// OpenAI-compatible shape does.
+    pub const fn accepts_token_budget(self) -> bool {
+        false
+    }
+
+    /// Whether the endpoint accepts any reasoning request field.
+    pub const fn is_supported(self) -> bool {
+        !matches!(self, Self::Unsupported)
+    }
+}
+
+/// The reasoning request shape an Anthropic-compatible endpoint accepts. Like
+/// [`OpenAiReasoningFormat`], always declared and never inferred.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnthropicReasoningFormat {
+    /// The endpoint takes no `thinking` request field. The default.
+    #[default]
+    Unsupported,
+    /// Anthropic's `thinking: { "type": "enabled", "budget_tokens": N }` /
+    /// `{ "type": "disabled" }` pair, where effort is expressed as a token
+    /// budget.
+    ThinkingBudget,
+    /// Anthropic's adaptive shape, `thinking: { "type": "enabled",
+    /// "effort": "low" | "medium" | "high" }`, which takes no budget.
+    ThinkingEffort,
+}
+
+impl AnthropicReasoningFormat {
+    /// Whether this shape carries an explicit reasoning token budget.
+    pub const fn accepts_token_budget(self) -> bool {
+        matches!(self, Self::ThinkingBudget)
+    }
+
+    /// Whether the endpoint accepts any reasoning request field.
+    pub const fn is_supported(self) -> bool {
+        !matches!(self, Self::Unsupported)
+    }
+}
+
 /// Endpoint quirks declared by an OpenAI-compatible provider.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OpenAiCompat {
@@ -45,6 +116,8 @@ pub struct OpenAiCompat {
     /// field (`""` when it produced no thinking) while a reasoning model is
     /// active. DeepSeek requires this.
     pub requires_reasoning_content_on_assistant_messages: bool,
+    /// The reasoning request shape this endpoint accepts.
+    pub reasoning_format: OpenAiReasoningFormat,
 }
 
 /// Endpoint quirks declared by an Anthropic-compatible provider.
@@ -57,6 +130,8 @@ pub struct AnthropicCompat {
     /// Send `x-session-affinity` from the session id when caching is enabled,
     /// for providers that route prompt-cache hits by replica.
     pub send_session_affinity_headers: bool,
+    /// The reasoning request shape this endpoint accepts.
+    pub reasoning_format: AnthropicReasoningFormat,
 }
 
 /// The in-process overlay of dynamically discovered models, layered over the
@@ -185,7 +260,25 @@ impl Provider {
         self
     }
 
+    /// Declare the reasoning request shape this OpenAI-compatible endpoint
+    /// accepts. Also decides the token-budget capability stamped onto the
+    /// models this provider serves.
+    pub fn with_openai_reasoning_format(mut self, format: OpenAiReasoningFormat) -> Self {
+        self.openai_compat.reasoning_format = format;
+        self
+    }
+
+    /// Declare the reasoning request shape this Anthropic-compatible endpoint
+    /// accepts; see
+    /// [`with_openai_reasoning_format`](Self::with_openai_reasoning_format).
+    pub fn with_anthropic_reasoning_format(mut self, format: AnthropicReasoningFormat) -> Self {
+        self.anthropic_compat.reasoning_format = format;
+        self
+    }
+
     /// OpenAI — Chat Completions with explicit prompt-cache routing support.
+    ///
+    /// Reasoning: top-level `reasoning_effort`.
     pub fn openai() -> Self {
         Self::openai_compatible(
             "openai",
@@ -194,10 +287,13 @@ impl Provider {
             ["OPENAI_API_KEY"],
         )
         .with_openai_prompt_caching(OpenAiPromptCaching::OpenAi)
+        .with_openai_reasoning_format(OpenAiReasoningFormat::ReasoningEffort)
         .with_models_dev_id("openai")
     }
 
     /// DeepSeek — OpenAI-compatible, `DEEPSEEK_API_KEY`.
+    ///
+    /// Reasoning: a `thinking` toggle plus `reasoning_effort`.
     pub fn deepseek() -> Self {
         Self::openai_compatible(
             "deepseek",
@@ -207,12 +303,15 @@ impl Provider {
         )
         .with_openai_compat(OpenAiCompat {
             requires_reasoning_content_on_assistant_messages: true,
+            reasoning_format: OpenAiReasoningFormat::DeepSeekThinking,
             ..OpenAiCompat::default()
         })
         .with_models_dev_id("deepseek")
     }
 
     /// Z.AI (GLM coding plan) — OpenAI-compatible, `ZAI_API_KEY`.
+    ///
+    /// Reasoning: a binary `thinking` toggle, no graded effort.
     pub fn zai() -> Self {
         Self::openai_compatible(
             "zai",
@@ -220,10 +319,13 @@ impl Provider {
             "https://api.z.ai/api/coding/paas/v4",
             ["ZAI_API_KEY"],
         )
+        .with_openai_reasoning_format(OpenAiReasoningFormat::ZaiThinking)
         .with_models_dev_id("zai")
     }
 
     /// MiniMax — Anthropic-compatible, `MINIMAX_API_KEY`.
+    ///
+    /// Reasoning: Anthropic's `thinking` block with a token budget.
     pub fn minimax() -> Self {
         Self::anthropic_compatible(
             "minimax",
@@ -231,10 +333,15 @@ impl Provider {
             "https://api.minimax.io/anthropic",
             ["MINIMAX_API_KEY"],
         )
+        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingBudget)
         .with_models_dev_id("minimax")
     }
 
     /// Moonshot AI — OpenAI-compatible, `MOONSHOT_API_KEY`.
+    ///
+    /// Reasoning: none on the request side — Moonshot's thinking models decide
+    /// for themselves, and the endpoint takes no reasoning field, so asking
+    /// for a level is refused instead of silently dropped.
     pub fn moonshot() -> Self {
         Self::openai_compatible(
             "moonshot",
@@ -246,6 +353,8 @@ impl Provider {
     }
 
     /// Kimi For Coding — Anthropic-compatible, `KIMI_API_KEY`.
+    ///
+    /// Reasoning: Anthropic's `thinking` block with a token budget.
     pub fn kimi() -> Self {
         Self::anthropic_compatible(
             "kimi",
@@ -253,10 +362,13 @@ impl Provider {
             "https://api.kimi.com/coding",
             ["KIMI_API_KEY"],
         )
+        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingBudget)
         .with_models_dev_id("kimi-for-coding")
     }
 
     /// Xiaomi MiMo — OpenAI-compatible, `XIAOMI_API_KEY`.
+    ///
+    /// Reasoning: top-level `reasoning_effort`.
     pub fn xiaomi() -> Self {
         Self::openai_compatible(
             "xiaomi",
@@ -264,6 +376,7 @@ impl Provider {
             "https://api.xiaomimimo.com/v1",
             ["XIAOMI_API_KEY"],
         )
+        .with_openai_reasoning_format(OpenAiReasoningFormat::ReasoningEffort)
         .with_models_dev_id("xiaomi")
     }
 
@@ -288,13 +401,51 @@ impl Provider {
         self.api_kind
     }
 
+    /// The endpoint quirks declared for this provider's OpenAI-compatible
+    /// protocol, including its reasoning request shape.
+    pub fn openai_compat(&self) -> OpenAiCompat {
+        self.openai_compat
+    }
+
+    /// The endpoint quirks declared for this provider's Anthropic-compatible
+    /// protocol, including its reasoning request shape.
+    pub fn anthropic_compat(&self) -> AnthropicCompat {
+        self.anthropic_compat
+    }
+
+    /// Whether the declared reasoning request shape of `api` carries an
+    /// explicit token budget, as the [`CapabilitySupport`] stamped onto the
+    /// models this provider serves. This is a property of the endpoint, so it
+    /// is attested either way — never left `Unknown`.
+    fn reasoning_token_budget(&self, api: ApiKind) -> CapabilitySupport {
+        let accepts = match api {
+            ApiKind::OpenAiCompletions => {
+                self.openai_compat.reasoning_format.accepts_token_budget()
+            }
+            ApiKind::AnthropicMessages => self
+                .anthropic_compat
+                .reasoning_format
+                .accepts_token_budget(),
+        };
+        if accepts {
+            CapabilitySupport::Supported
+        } else {
+            CapabilitySupport::Unsupported
+        }
+    }
+
     /// The provider's models: caller-supplied models first, then the bundled
     /// catalog, then anything dynamic discovery has found — models.dev entries
     /// override same-id entries and append new ones; probe-discovered models
     /// are append-only.
     pub fn models(&self) -> Vec<Model> {
         let mut merged = self.models.clone();
-        for model in crate::models::catalog_models(&self.id, &self.base_url, self.api_kind) {
+        for model in crate::models::catalog_models(
+            &self.id,
+            &self.base_url,
+            self.api_kind,
+            self.reasoning_token_budget(self.api_kind),
+        ) {
             if !merged.iter().any(|known| known.id == model.id) {
                 merged.push(model);
             }
@@ -330,6 +481,7 @@ impl Provider {
             &self.id,
             &self.base_url,
             self.api_kind,
+            self.reasoning_token_budget(self.api_kind),
         ) {
             Some(models) => {
                 self.overlay
@@ -393,7 +545,8 @@ impl Provider {
                 provider: self.id.clone(),
                 base_url: self.base_url.clone(),
                 headers: Default::default(),
-                reasoning: false,
+                // A bare id attests nothing: no reasoning level, no budget.
+                reasoning: crate::types::ReasoningCapability::none(),
                 input: vec![crate::types::Modality::Text],
                 // A bare id attests nothing: capabilities stay Unknown.
                 capabilities: crate::types::ModelCapabilities::default(),

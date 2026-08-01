@@ -13,7 +13,7 @@
 
 use serde_json::Value;
 
-use crate::types::{CapabilitySupport, Modality, ModelCost};
+use crate::types::{CapabilitySupport, Modality, ModelCost, ReasoningCapability};
 
 /// A models.dev model entry mapped onto banshu's metadata vocabulary. Carries
 /// no provider identity — the caller stamps `provider`/`base_url`/`api`.
@@ -47,6 +47,27 @@ impl ModelsDevModel {
             && self.input.contains(&Modality::Text)
             && self.output.contains(&Modality::Text)
     }
+}
+
+/// Map a models.dev-style `reasoning` boolean plus the owning provider's
+/// declared token-budget support onto a [`ReasoningCapability`].
+///
+/// `true` attests the [`ReasoningCapability::BASELINE`] ladder and nothing
+/// more: models.dev names no effort levels, so `xhigh` and `max` stay
+/// unattested rather than assumed, and the budget capability comes from the
+/// provider's declared request shape. `false` attests no level at all, and a
+/// model that does not reason cannot take a reasoning budget either.
+///
+/// Both the bundled catalog and the runtime Catalog Refresh go through here,
+/// so the two can never disagree about what a `reasoning` flag means.
+pub fn reasoning_capability(
+    reasoning: bool,
+    token_budget: CapabilitySupport,
+) -> ReasoningCapability {
+    if !reasoning {
+        return ReasoningCapability::none().with_token_budget(CapabilitySupport::Unsupported);
+    }
+    ReasoningCapability::baseline().with_token_budget(token_budget)
 }
 
 /// Map models.dev `tool_call` onto [`CapabilitySupport`]: `true` → Supported,
