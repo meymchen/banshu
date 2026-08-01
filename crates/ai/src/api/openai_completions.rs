@@ -16,8 +16,8 @@ use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::provider::{OpenAiCompat, OpenAiPromptCaching};
 use crate::types::{
-    ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Modality, Model,
-    StopReason, ThinkingContent, Usage, UserContent, UserMessage,
+    ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model, StopReason,
+    ThinkingContent, Usage, UserContent, UserMessage,
 };
 
 /// The OpenAI-completions wire protocol.
@@ -68,9 +68,6 @@ impl ProtocolAdapter for OpenAiCompletions {
             openai_compat,
         ))
         .unwrap_or_default();
-        // issue #22: the body build replaced tool-result images with placeholder
-        // text on a text-only model; report it on the resulting message.
-        let downgrade = super::tool_image_downgrade(&model, &context);
         let base_url = model.base_url.clone();
         let cost = model.cost.clone();
         let timeout = options.timeout;
@@ -78,9 +75,6 @@ impl ProtocolAdapter for OpenAiCompletions {
         let max_retry_delay = options.max_retry_delay;
 
         let stream = async_stream::stream! {
-            if let Some(diagnostic) = downgrade {
-                yield ProtocolEvent::Diagnostic(diagnostic);
-            }
             let base = auth.base_url.as_deref().unwrap_or(&base_url);
             let url = format!("{}/chat/completions", base.trim_end_matches('/'));
             let factory = move || {
@@ -376,63 +370,54 @@ fn user_content_wire(user: &UserMessage) -> serde_json::Value {
             .iter()
             .map(|content| match content {
                 UserContent::Text(text) => json!({ "type": "text", "text": text.text }),
-                UserContent::Image(image) => json!({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": format!("data:{};base64,{}", image.mime_type, image.data),
-                    },
-                }),
+                UserContent::Image(image) => image_url_block(image),
             })
             .collect(),
     )
 }
 
+/// An image as OpenAI's `image_url` block, carrying a base64 data URL.
+fn image_url_block(image: &crate::types::ImageContent) -> serde_json::Value {
+    serde_json::json!({
+        "type": "image_url",
+        "image_url": {
+            "url": format!("data:{};base64,{}", image.mime_type, image.data),
+        },
+    })
+}
+
 /// Serialize the run of consecutive tool results starting at `start`: one
 /// `tool` message each, text-only (an image-only result reads
-/// `(see attached image)`), then — when the model accepts images — a single
-/// trailing `user` message carrying every image block from the run. Images
-/// cannot ride inside `tool` messages, and those must immediately follow the
-/// assistant turn, so the images trail the whole run instead. On a text-only
-/// model each image block is replaced in place with the issue #22 placeholder
-/// text. Returns the index after the run.
+/// `(see attached image)`), then a single trailing `user` message carrying
+/// every image block from the run. Images cannot ride inside `tool` messages,
+/// and those must immediately follow the assistant turn, so the images trail
+/// the whole run instead. A result only still holds images if the model
+/// accepts them — the normalizer replaced them with placeholder text
+/// otherwise. Returns the index after the run.
 fn push_tool_results(
     messages: &mut Vec<serde_json::Value>,
     context_messages: &[Message],
     start: usize,
-    accepts_images: bool,
 ) -> usize {
     use serde_json::json;
 
     let mut images: Vec<serde_json::Value> = Vec::new();
     let mut index = start;
     while let Some(Message::ToolResult(result)) = context_messages.get(index) {
-        let content = if !result.has_image() {
-            result.text_content()
-        } else if accepts_images {
-            let text = result.text_content();
-            if text.is_empty() {
-                "(see attached image)".to_string()
-            } else {
-                text
-            }
+        let text = result.text_content();
+        let content = if result.has_image() && text.is_empty() {
+            "(see attached image)".to_string()
         } else {
-            result.text_content_with_image_placeholders()
+            text
         };
         messages.push(json!({
             "role": "tool",
             "tool_call_id": result.tool_call_id,
             "content": content,
         }));
-        if accepts_images {
-            for block in &result.content {
-                if let UserContent::Image(image) = block {
-                    images.push(json!({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": format!("data:{};base64,{}", image.mime_type, image.data),
-                        },
-                    }));
-                }
+        for block in &result.content {
+            if let UserContent::Image(image) = block {
+                images.push(image_url_block(image));
             }
         }
         index += 1;
@@ -458,7 +443,6 @@ fn build_request_body(
     if let Some(system) = &context.system_prompt {
         messages.push(json!({ "role": "system", "content": system }));
     }
-    let accepts_images = model.input.contains(&Modality::Image);
     let mut index = 0;
     while index < context.messages.len() {
         match &context.messages[index] {
@@ -526,7 +510,7 @@ fn build_request_body(
                 index += 1;
             }
             Message::ToolResult(_) => {
-                index = push_tool_results(&mut messages, &context.messages, index, accepts_images);
+                index = push_tool_results(&mut messages, &context.messages, index);
             }
         }
     }
