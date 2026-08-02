@@ -42,9 +42,12 @@ pub enum OpenAiPromptCaching {
 /// model id. A request the declared shape cannot carry is refused before
 /// dispatch rather than sent in a shape the endpoint would ignore or reject.
 ///
-/// The shapes named here are the ones banshu's target providers use; no claim
-/// is made about any other endpoint that happens to speak
-/// `POST /chat/completions`.
+/// The shapes named here are the ones banshu's target providers document; no
+/// claim is made about any other endpoint that happens to speak
+/// `POST /chat/completions`. Each variant states the exact fields it puts on
+/// the wire, including the value it sends for
+/// [`ReasoningEffort::Off`](crate::ReasoningEffort::Off) — disabling reasoning
+/// is an explicit request, never the absence of a field.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OpenAiReasoningFormat {
@@ -52,17 +55,33 @@ pub enum OpenAiReasoningFormat {
     /// request against this provider is refused; a model that reasons on its
     /// own still streams its thinking back. The default, because an
     /// unconfigured endpoint attests nothing.
+    ///
+    /// Declared by [`Provider::moonshot`].
     #[default]
     Unsupported,
-    /// OpenAI's top-level `reasoning_effort: "<effort>"` string.
+    /// A top-level `reasoning_effort: "<effort>"` string and nothing else.
+    /// `Off` sends `reasoning_effort: "none"`, the documented disabling value
+    /// of this shape.
+    ///
+    /// Declared by [`Provider::openai`].
     ReasoningEffort,
-    /// DeepSeek's `thinking: { "type": "enabled" | "disabled" }` toggle
-    /// alongside a top-level `reasoning_effort`.
-    DeepSeekThinking,
-    /// Z.AI's `thinking: { "type": "enabled" | "disabled" }` toggle. Binary:
-    /// the endpoint carries no graded effort, so any level above `Off` reads
-    /// as "enabled".
-    ZaiThinking,
+    /// A `thinking: { "type": "enabled" | "disabled" }` toggle carrying a
+    /// top-level `reasoning_effort: "<effort>"` when enabled. `Off` sends
+    /// `thinking: { "type": "disabled" }` alone — the toggle is what disables
+    /// reasoning here, so no effort string rides along.
+    ///
+    /// Declared by [`Provider::deepseek`] and [`Provider::xiaomi`], both of
+    /// which document this pair.
+    ThinkingToggle,
+    /// The same toggle and *only* the toggle: no effort string rides along in
+    /// either direction, so any level above `Off` reads as
+    /// `thinking: { "type": "enabled" }` and `Off` as
+    /// `thinking: { "type": "disabled" }`.
+    ///
+    /// Declared by [`Provider::zai`]. Refusing `Medium` here would make the
+    /// provider unusable for a caller who simply wants reasoning on, so the
+    /// ladder collapses onto the toggle instead.
+    ThinkingToggleOnly,
 }
 
 impl OpenAiReasoningFormat {
@@ -347,7 +366,7 @@ impl Provider {
         )
         .with_openai_compat(OpenAiCompat {
             requires_reasoning_content_on_assistant_messages: true,
-            reasoning_format: OpenAiReasoningFormat::DeepSeekThinking,
+            reasoning_format: OpenAiReasoningFormat::ThinkingToggle,
             ..OpenAiCompat::default()
         })
         .with_models_dev_id("deepseek")
@@ -363,7 +382,7 @@ impl Provider {
             "https://api.z.ai/api/coding/paas/v4",
             ["ZAI_API_KEY"],
         )
-        .with_openai_reasoning_format(OpenAiReasoningFormat::ZaiThinking)
+        .with_openai_reasoning_format(OpenAiReasoningFormat::ThinkingToggleOnly)
         .with_models_dev_id("zai")
     }
 
@@ -412,7 +431,10 @@ impl Provider {
 
     /// Xiaomi MiMo — OpenAI-compatible, `XIAOMI_API_KEY`.
     ///
-    /// Reasoning: top-level `reasoning_effort`.
+    /// Reasoning: a `thinking` toggle plus `reasoning_effort`. MiMo's own
+    /// chat-completions reference disables reasoning with
+    /// `thinking: { "type": "disabled" }`, so that is the toggle it gets — the
+    /// `reasoning_effort` string alone has no documented off value here.
     pub fn xiaomi() -> Self {
         Self::openai_compatible(
             "xiaomi",
@@ -420,7 +442,7 @@ impl Provider {
             "https://api.xiaomimimo.com/v1",
             ["XIAOMI_API_KEY"],
         )
-        .with_openai_reasoning_format(OpenAiReasoningFormat::ReasoningEffort)
+        .with_openai_reasoning_format(OpenAiReasoningFormat::ThinkingToggle)
         .with_models_dev_id("xiaomi")
     }
 

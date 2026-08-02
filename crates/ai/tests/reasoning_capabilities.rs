@@ -49,12 +49,12 @@ const REASONING_WIRE_FIELDS: [&str; 5] = [
 const OPENAI_TARGETS: [(&str, OpenAiReasoningFormat, CapabilitySupport); 4] = [
     (
         "deepseek",
-        OpenAiReasoningFormat::DeepSeekThinking,
+        OpenAiReasoningFormat::ThinkingToggle,
         CapabilitySupport::Unsupported,
     ),
     (
         "zai",
-        OpenAiReasoningFormat::ZaiThinking,
+        OpenAiReasoningFormat::ThinkingToggleOnly,
         CapabilitySupport::Unsupported,
     ),
     (
@@ -64,7 +64,7 @@ const OPENAI_TARGETS: [(&str, OpenAiReasoningFormat, CapabilitySupport); 4] = [
     ),
     (
         "xiaomi",
-        OpenAiReasoningFormat::ReasoningEffort,
+        OpenAiReasoningFormat::ThinkingToggle,
         CapabilitySupport::Unsupported,
     ),
 ];

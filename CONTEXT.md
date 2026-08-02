@@ -148,6 +148,23 @@ provider that declares none refuses every reasoning request instead of
 sending a field the endpoint would ignore.
 _Avoid_: thinking format, wire shape
 
+The OpenAI-compatible shapes banshu maps (issue #43), each named for the
+fields it puts on the wire rather than for a vendor, and each stating what
+`off` sends. Only endpoints banshu targets are claimed; nothing here is a
+statement about other services that speak `POST /chat/completions`:
+
+| Shape | Enabled | `off` | Declared by |
+| --- | --- | --- | --- |
+| `ThinkingToggle` | `thinking:{"type":"enabled"}` + `reasoning_effort:"<level>"` | `thinking:{"type":"disabled"}`, no effort | DeepSeek, Xiaomi MiMo |
+| `ThinkingToggleOnly` | `thinking:{"type":"enabled"}` | `thinking:{"type":"disabled"}` | Z.AI |
+| `ReasoningEffort` | `reasoning_effort:"<level>"` | `reasoning_effort:"none"` | OpenAI |
+| `Unsupported` | — refuses every request | — | Moonshot AI |
+
+`ThinkingToggleOnly` carries no effort field, so the ladder collapses onto its
+toggle: any level above `off` reads as "enabled". `off` is spelled `none` in a
+`reasoning_effort` field — banshu's own name for the level is `off`, and the
+two are not interchangeable on the wire.
+
 **Reasoning preflight** (issue #42):
 The check in stream dispatch, ahead of Context normalization and auth, that a
 reasoning request can be honoured by both the model's Reasoning Capability and
