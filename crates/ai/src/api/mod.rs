@@ -17,6 +17,7 @@ pub mod openai_completions;
 mod assembler;
 mod normalize;
 mod protocol_event;
+mod reasoning;
 
 use std::sync::Arc;
 
@@ -233,6 +234,20 @@ pub(crate) fn drive(
             api_name(adapter.kind()),
         ));
         yield AssistantMessageEvent::Start;
+
+        // The reasoning preflight reads only the options, the model's
+        // attested capability, and the provider's declared request shape, so
+        // it runs first: a request nothing can honour fails before any work
+        // is done on its behalf.
+        if let Err(detail) = reasoning::validate(
+            &model,
+            options.reasoning.as_ref(),
+            openai_compat,
+            anthropic_compat,
+        ) {
+            yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
+            return;
+        }
 
         // The one normalization pass: cross-model rules are resolved here,
         // once, so the adapter below sees a context it can translate

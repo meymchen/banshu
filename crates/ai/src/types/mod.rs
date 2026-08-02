@@ -8,6 +8,7 @@ mod content;
 mod context;
 mod message;
 mod model;
+mod reasoning;
 mod tool;
 mod usage;
 
@@ -20,6 +21,7 @@ pub use message::{
     UserMessage,
 };
 pub use model::{ApiKind, CapabilitySupport, Modality, Model, ModelCapabilities, ModelCost};
+pub use reasoning::{ReasoningCapability, ReasoningEffort, ReasoningOptions};
 pub use tool::Tool;
 pub use usage::{Cost, Usage};
 

@@ -43,7 +43,10 @@ pub use auth::{Auth, AuthResolver, ProviderHeaders, ResolvedAuth};
 pub use discovery::{RefreshEntry, RefreshOutcome, RefreshReport};
 pub use error::{Error, ErrorKind, Result};
 pub use options::{CacheRetention, StreamOptions};
-pub use provider::{AnthropicCompat, OpenAiCompat, OpenAiPromptCaching, Provider, ProviderBuilder};
+pub use provider::{
+    AnthropicCompat, AnthropicReasoningFormat, OpenAiCompat, OpenAiPromptCaching,
+    OpenAiReasoningFormat, Provider, ProviderBuilder,
+};
 pub use registry::Models;
 pub use stream::{AssistantMessageEvent, MessageStream};
 /// Re-exported so callers can construct a [`StreamOptions::cancellation`]

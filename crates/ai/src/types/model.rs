@@ -1,6 +1,7 @@
 //! The `Model` metadata type and its supporting enums.
 
 use crate::auth::{ProviderHeaders, RedactedHeaders};
+use crate::types::ReasoningCapability;
 
 /// Which wire protocol a model speaks. Used for identification and to route
 /// the model to the matching [`ProtocolAdapter`](crate::ProtocolAdapter).
@@ -43,6 +44,15 @@ pub enum CapabilitySupport {
     Unknown,
 }
 
+impl CapabilitySupport {
+    /// Whether the capability is attested as working. `Unsupported` and
+    /// `Unknown` both read as `false` — nothing unattested is presented as
+    /// supported.
+    pub fn is_supported(self) -> bool {
+        matches!(self, Self::Supported)
+    }
+}
+
 /// What a model can do, per capability. Every source that cannot attest a
 /// capability leaves it [`CapabilitySupport::Unknown`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -79,8 +89,11 @@ pub struct Model {
     pub base_url: String,
     /// Model-specific custom headers, applied above provider defaults.
     pub headers: ProviderHeaders,
-    /// Whether the model supports reasoning / thinking.
-    pub reasoning: bool,
+    /// The effort levels and token-budget support the model's metadata source
+    /// attests for reasoning / thinking. Nothing attested means every
+    /// reasoning request against this model is refused; see
+    /// [`ReasoningCapability`].
+    pub reasoning: ReasoningCapability,
     /// Accepted input modalities.
     pub input: Vec<Modality>,
     /// Capability attestations from the model's metadata source.
@@ -125,7 +138,7 @@ impl Model {
             provider: String::new(),
             base_url: String::new(),
             headers: ProviderHeaders::new(),
-            reasoning: false,
+            reasoning: ReasoningCapability::none(),
             input: vec![Modality::Text],
             capabilities: ModelCapabilities::default(),
             cost: ModelCost::default(),
@@ -144,7 +157,7 @@ impl Model {
             provider: String::new(),
             base_url: String::new(),
             headers: ProviderHeaders::new(),
-            reasoning: false,
+            reasoning: ReasoningCapability::none(),
             input: vec![Modality::Text],
             capabilities: ModelCapabilities::default(),
             cost: ModelCost::default(),

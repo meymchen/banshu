@@ -11,7 +11,7 @@
 
 use banshu_ai::{
     AssistantContent, AssistantMessage, Context, Message, Model, OpenAiCompat, Provider,
-    StreamOptions, TextContent, ThinkingContent,
+    ReasoningCapability, StreamOptions, TextContent, ThinkingContent,
 };
 use serde_json::Value;
 use wiremock::matchers::{method, path};
@@ -174,7 +174,11 @@ async fn backfills_empty_reasoning_content_for_reasoning_models_when_required() 
                 ..OpenAiCompat::default()
             });
         let mut model = model(&server);
-        model.reasoning = model_reasoning;
+        model.reasoning = if model_reasoning {
+            ReasoningCapability::baseline()
+        } else {
+            ReasoningCapability::none()
+        };
         let context = Context::new()
             .user("2+2?")
             .with_message(Message::Assistant(Box::new(
@@ -201,7 +205,7 @@ async fn deepseek_provider_requires_reasoning_content_by_default() {
     .await;
 
     let mut model = model(&server);
-    model.reasoning = true;
+    model.reasoning = ReasoningCapability::baseline();
     let context = Context::new()
         .user("2+2?")
         .with_message(Message::Assistant(Box::new(
