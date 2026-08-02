@@ -46,7 +46,7 @@ const ALL_REASONING_FIELDS: [&str; 5] = [
 /// The four OpenAI-compatible targets and the request shape each declares.
 const TARGETS: [(&str, OpenAiReasoningFormat); 4] = [
     ("deepseek", OpenAiReasoningFormat::ThinkingToggle),
-    ("xiaomi", OpenAiReasoningFormat::ThinkingToggle),
+    ("xiaomi", OpenAiReasoningFormat::ThinkingToggleOnly),
     ("zai", OpenAiReasoningFormat::ThinkingToggleOnly),
     ("moonshot", OpenAiReasoningFormat::Unsupported),
 ];
@@ -84,17 +84,22 @@ fn options(reasoning: Option<ReasoningOptions>) -> StreamOptions {
     }
 }
 
-/// A reasoning model for `provider`, pointed at `server`: the first entry its
-/// catalog attests as reasoning, or — for a provider banshu bundles no catalog
-/// for — a hand-built model attesting the baseline ladder, which is what a
-/// caller of such a provider supplies themselves.
+/// A model of `provider` to stream against, pointed at `server`: one that
+/// attests a reasoning level, else the provider's first model, else — for a
+/// provider banshu bundles no catalog for at all — a hand-built model
+/// attesting the baseline ladder, which is what a caller of such a provider
+/// supplies themselves.
+///
+/// The middle case is Moonshot, whose endpoint takes no reasoning field and
+/// whose models therefore attest no level; the last is `openai`.
 fn reasoning_model(provider: &Provider, server: &MockServer) -> Model {
-    if let Some(model) = provider
-        .models()
-        .into_iter()
+    let models = provider.models();
+    if let Some(model) = models
+        .iter()
         .find(|model| model.reasoning.reasons())
+        .or_else(|| models.first())
     {
-        return model.with_base_url(server.uri());
+        return model.clone().with_base_url(server.uri());
     }
     let mut model = Model::openai_completions("custom-reasoner").with_base_url(server.uri());
     model.provider = provider.id().to_string();
@@ -167,28 +172,53 @@ fn disabled() -> Value {
     serde_json::json!({ "type": "disabled" })
 }
 
+/// The levels `provider_id`'s models actually attest, above `Off`. Every
+/// enabled-request test drives off this rather than a hardcoded ladder: what a
+/// provider accepts is its own declaration, so a test that hardcoded the list
+/// would just re-assert the bug the declaration exists to prevent.
+///
+/// The exact ladders are pinned independently — against hand-written constants
+/// — in `reasoning_capabilities.rs`; this only asks *which* levels to send.
+/// Callers that loop over the result must assert it is non-empty, or an
+/// emptied vocabulary would turn their test green by skipping its body.
+async fn attested_levels_above_off(provider_id: &str) -> Vec<ReasoningEffort> {
+    let server = mock_server().await;
+    let model = reasoning_model(&provider(provider_id), &server);
+    model
+        .reasoning
+        .efforts()
+        .iter()
+        .copied()
+        .filter(|effort| *effort > ReasoningEffort::Off)
+        .collect()
+}
+
+/// [`attested_levels_above_off`] for a provider that must have some, failing
+/// rather than letting a caller's loop body silently never run.
+async fn some_attested_levels_above_off(provider_id: &str) -> Vec<ReasoningEffort> {
+    let levels = attested_levels_above_off(provider_id).await;
+    assert!(
+        !levels.is_empty(),
+        "`{provider_id}` should attest a requestable level"
+    );
+    levels
+}
+
 // ---------------------------------------------------------------------------
-// `thinking` toggle plus a graded effort — DeepSeek and Xiaomi MiMo
+// `thinking` toggle plus a graded effort — DeepSeek
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn the_thinking_toggle_shape_enables_with_a_graded_effort() {
-    for id in ["deepseek", "xiaomi"] {
-        for effort in [
-            ReasoningEffort::Minimal,
-            ReasoningEffort::Low,
-            ReasoningEffort::Medium,
-            ReasoningEffort::High,
-        ] {
-            let body = sent_body(id, Some(ReasoningOptions::new(effort))).await;
-            carries_only(
-                &body,
-                &[
-                    ("thinking", enabled()),
-                    ("reasoning_effort", Value::String(effort.to_string())),
-                ],
-            );
-        }
+    for effort in some_attested_levels_above_off("deepseek").await {
+        let body = sent_body("deepseek", Some(ReasoningOptions::new(effort))).await;
+        carries_only(
+            &body,
+            &[
+                ("thinking", enabled()),
+                ("reasoning_effort", Value::String(effort.to_string())),
+            ],
+        );
     }
 }
 
@@ -197,32 +227,65 @@ async fn the_thinking_toggle_shape_disables_with_the_toggle_alone() {
     // `Off` is an explicit request to stop reasoning, and this shape spells
     // that with the toggle. No effort string rides along: the toggle is what
     // disables, and `reasoning_effort` has no documented off value here.
-    for id in ["deepseek", "xiaomi"] {
-        let body = sent_body(id, Some(ReasoningOptions::new(ReasoningEffort::Off))).await;
-        carries_only(&body, &[("thinking", disabled())]);
-    }
+    let body = sent_body(
+        "deepseek",
+        Some(ReasoningOptions::new(ReasoningEffort::Off)),
+    )
+    .await;
+    carries_only(&body, &[("thinking", disabled())]);
+}
+
+#[tokio::test]
+async fn the_graded_shape_speaks_its_providers_vocabulary_not_a_default_ladder() {
+    // The point of a declared vocabulary, proven in both directions on the one
+    // provider that names one. DeepSeek's reference lists `low`/`high`/`max`
+    // and maps `medium`/`xhigh` onto `high`; `minimal` appears nowhere.
+    //
+    // A hardcoded baseline ladder got both ends wrong: it would have sent
+    // `minimal` to an endpoint that has never heard of it, and refused `max`
+    // the endpoint documents.
+    let attested = some_attested_levels_above_off("deepseek").await;
+    assert!(
+        !attested.contains(&ReasoningEffort::Minimal),
+        "DeepSeek documents no `minimal`: {attested:?}"
+    );
+    assert!(
+        attested.contains(&ReasoningEffort::Max),
+        "DeepSeek documents `max`, which the baseline ladder stops short of: {attested:?}"
+    );
+
+    rejected("deepseek", ReasoningOptions::new(ReasoningEffort::Minimal)).await;
+    let body = sent_body(
+        "deepseek",
+        Some(ReasoningOptions::new(ReasoningEffort::Max)),
+    )
+    .await;
+    carries_only(
+        &body,
+        &[
+            ("thinking", enabled()),
+            ("reasoning_effort", Value::String("max".into())),
+        ],
+    );
 }
 
 // ---------------------------------------------------------------------------
-// `thinking` toggle alone — Z.AI
+// `thinking` toggle alone — Z.AI and Xiaomi MiMo
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn the_thinking_toggle_only_shape_has_no_graded_effort() {
-    // The shape carries no effort field, so every level above `Off` reads as
-    // "enabled" — and none of them leaks a `reasoning_effort` string.
-    for effort in [
-        ReasoningEffort::Minimal,
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-    ] {
-        let body = sent_body("zai", Some(ReasoningOptions::new(effort))).await;
-        carries_only(&body, &[("thinking", enabled())]);
-    }
+    // The shape carries no effort field, so every attested level above `Off`
+    // reads as "enabled" — and none of them leaks a `reasoning_effort` string.
+    for id in ["zai", "xiaomi"] {
+        for effort in some_attested_levels_above_off(id).await {
+            let body = sent_body(id, Some(ReasoningOptions::new(effort))).await;
+            carries_only(&body, &[("thinking", enabled())]);
+        }
 
-    let body = sent_body("zai", Some(ReasoningOptions::new(ReasoningEffort::Off))).await;
-    carries_only(&body, &[("thinking", disabled())]);
+        let body = sent_body(id, Some(ReasoningOptions::new(ReasoningEffort::Off))).await;
+        carries_only(&body, &[("thinking", disabled())]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,11 +385,27 @@ async fn no_declared_shape_carries_a_token_budget() {
 }
 
 #[tokio::test]
-async fn an_effort_beyond_the_attested_ladder_is_refused_by_every_shape() {
+async fn every_shape_refuses_exactly_the_levels_its_provider_does_not_attest() {
+    // The whole ladder against every target: a level the provider's models
+    // attest goes through, and every other one is refused before HTTP. Which
+    // levels those are differs per provider — that is the point — so the
+    // expectation is read from the attestation, not written down here.
     for (id, _) in TARGETS {
-        for effort in [ReasoningEffort::XHigh, ReasoningEffort::Max] {
+        let attested = attested_levels_above_off(id).await;
+        for effort in ReasoningEffort::ALL {
+            if effort == ReasoningEffort::Off || attested.contains(&effort) {
+                continue;
+            }
             rejected(id, ReasoningOptions::new(effort)).await;
         }
+    }
+
+    // And no target attests the whole ladder, so the loop above is not vacuous.
+    for (id, _) in TARGETS {
+        assert!(
+            attested_levels_above_off(id).await.len() < ReasoningEffort::ALL.len() - 1,
+            "`{id}` should refuse at least one level"
+        );
     }
 }
 

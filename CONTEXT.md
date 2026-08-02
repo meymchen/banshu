@@ -50,9 +50,10 @@ What a model's metadata source attests about reasoning: the effort levels it
 accepts and whether an explicit token budget may be requested. Replaces a
 plain "supports reasoning" boolean so an unattested level is refused rather
 than quietly becoming a different one — the same honesty rule as Capability
-Support. A source that says only "this model reasons" attests the baseline
-ladder `off`…`high`; `xhigh` and `max` need an attestation of their own, and
-Probe models attest nothing.
+Support. A source that says only "this model reasons" attests whichever
+Reasoning Effort Vocabulary its provider declares, falling back to the baseline
+ladder `off`…`high` where the provider declares none; Probe models attest
+nothing.
 _Avoid_: reasoning flag, thinking support
 
 ### Core (established)
@@ -155,8 +156,8 @@ statement about other services that speak `POST /chat/completions`:
 
 | Shape | Enabled | `off` | Declared by |
 | --- | --- | --- | --- |
-| `ThinkingToggle` | `thinking:{"type":"enabled"}` + `reasoning_effort:"<level>"` | `thinking:{"type":"disabled"}`, no effort | DeepSeek, Xiaomi MiMo |
-| `ThinkingToggleOnly` | `thinking:{"type":"enabled"}` | `thinking:{"type":"disabled"}` | Z.AI |
+| `ThinkingToggle` | `thinking:{"type":"enabled"}` + `reasoning_effort:"<level>"` | `thinking:{"type":"disabled"}`, no effort | DeepSeek |
+| `ThinkingToggleOnly` | `thinking:{"type":"enabled"}` | `thinking:{"type":"disabled"}` | Z.AI, Xiaomi MiMo |
 | `ReasoningEffort` | `reasoning_effort:"<level>"` | `reasoning_effort:"none"` | OpenAI |
 | `Unsupported` | — refuses every request | — | Moonshot AI |
 
@@ -164,6 +165,30 @@ statement about other services that speak `POST /chat/completions`:
 toggle: any level above `off` reads as "enabled". `off` is spelled `none` in a
 `reasoning_effort` field — banshu's own name for the level is `off`, and the
 two are not interchangeable on the wire.
+
+**Reasoning Effort Vocabulary**
+(`OpenAiCompat::reasoning_efforts` / `AnthropicCompat::reasoning_efforts`):
+The effort levels a provider's own reference documents, declared alongside its
+Reasoning Request Format and stamped onto the models it serves in place of the
+baseline ladder. A model metadata source says only *whether* a model reasons,
+never which levels it takes, so without this every provider would inherit the
+same invented default and a level the endpoint has never heard of would sail
+past the Reasoning preflight into a `400`. Declaring narrows *and* widens: a
+provider documenting `max` gets it, one documenting no `minimal` refuses it.
+
+A level the endpoint accepts but silently *remaps* onto another stays out of
+the vocabulary — attesting it would move the clamp banshu refuses to perform
+onto the server, where the caller cannot see it. This is why DeepSeek attests
+`off`/`low`/`high`/`max` and not `medium`/`xhigh`, which its reference maps
+onto `high`.
+
+Three states, the last two of which differ: declaring nothing keeps the
+baseline ladder, right for an endpoint whose shape has no effort field to
+constrain; declaring levels makes exactly those requestable; declaring an
+*empty* vocabulary makes none requestable and is right for an endpoint with no
+reasoning request field at all — those models may still stream thinking, but
+no effort can be asked of them, so `ReasoningCapability::reasons()` is `false`.
+_Avoid_: effort whitelist, level map
 
 **Reasoning preflight** (issue #42):
 The check in stream dispatch, ahead of Context normalization and auth, that a

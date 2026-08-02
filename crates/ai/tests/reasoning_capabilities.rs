@@ -43,43 +43,77 @@ const REASONING_WIRE_FIELDS: [&str; 5] = [
     "chat_template_kwargs",
 ];
 
+/// The ladder a provider's models attest when the provider declares no effort
+/// vocabulary of its own — the honest fallback, not a claim about the endpoint.
+const BASELINE: &[ReasoningEffort] = &ReasoningCapability::BASELINE;
+
+/// DeepSeek's own vocabulary: its reference documents `low`/`high`/`max`, plus
+/// `off` on the `thinking` toggle. `medium` and `xhigh` are accepted only by
+/// being remapped onto `high`, which is a clamp, so they stay out.
+const DEEPSEEK_LADDER: &[ReasoningEffort] = &[
+    ReasoningEffort::Off,
+    ReasoningEffort::Low,
+    ReasoningEffort::High,
+    ReasoningEffort::Max,
+];
+
+/// Moonshot's endpoint has no reasoning request field, so no level is
+/// requestable and its models attest none.
+const NO_LADDER: &[ReasoningEffort] = &[];
+
 /// The four OpenAI-compatible targets: provider id, the reasoning request
-/// shape its endpoint declares, and the token-budget support that shape
-/// carries.
-const OPENAI_TARGETS: [(&str, OpenAiReasoningFormat, CapabilitySupport); 4] = [
+/// shape its endpoint declares, the token-budget support that shape carries,
+/// and the effort ladder its models therefore attest.
+const OPENAI_TARGETS: [(
+    &str,
+    OpenAiReasoningFormat,
+    CapabilitySupport,
+    &[ReasoningEffort],
+); 4] = [
     (
         "deepseek",
         OpenAiReasoningFormat::ThinkingToggle,
         CapabilitySupport::Unsupported,
+        DEEPSEEK_LADDER,
     ),
     (
         "zai",
         OpenAiReasoningFormat::ThinkingToggleOnly,
         CapabilitySupport::Unsupported,
+        BASELINE,
     ),
     (
         "moonshot",
         OpenAiReasoningFormat::Unsupported,
         CapabilitySupport::Unsupported,
+        NO_LADDER,
     ),
     (
         "xiaomi",
-        OpenAiReasoningFormat::ThinkingToggle,
+        OpenAiReasoningFormat::ThinkingToggleOnly,
         CapabilitySupport::Unsupported,
+        BASELINE,
     ),
 ];
 
 /// The two Anthropic-compatible targets, same shape.
-const ANTHROPIC_TARGETS: [(&str, AnthropicReasoningFormat, CapabilitySupport); 2] = [
+const ANTHROPIC_TARGETS: [(
+    &str,
+    AnthropicReasoningFormat,
+    CapabilitySupport,
+    &[ReasoningEffort],
+); 2] = [
     (
         "minimax",
         AnthropicReasoningFormat::ThinkingBudget,
         CapabilitySupport::Supported,
+        BASELINE,
     ),
     (
         "kimi",
         AnthropicReasoningFormat::ThinkingBudget,
         CapabilitySupport::Supported,
+        BASELINE,
     ),
 ];
 
@@ -140,14 +174,19 @@ async fn mount_anthropic_sse(server: &MockServer) {
         .await;
 }
 
-/// A model this provider serves that its catalog attests as reasoning, pointed
-/// at the mock server.
+/// A model of this provider to stream against, pointed at the mock server:
+/// one that attests a reasoning level where the provider offers any, else its
+/// first model. Moonshot is the "else": its endpoint takes no reasoning field,
+/// so none of its models attests a level — and a request there is refused on
+/// the format before the model is ever consulted.
 fn reasoning_model(provider: &Provider, server: &MockServer) -> Model {
-    provider
-        .models()
-        .into_iter()
+    let models = provider.models();
+    models
+        .iter()
         .find(|model| model.reasoning.reasons())
-        .unwrap_or_else(|| panic!("`{}` should serve a reasoning model", provider.id()))
+        .or_else(|| models.first())
+        .unwrap_or_else(|| panic!("`{}` should serve models", provider.id()))
+        .clone()
         .with_base_url(server.uri())
 }
 
@@ -266,65 +305,84 @@ fn hand_built_models_attest_nothing_until_told() {
 
 #[test]
 fn every_target_provider_declares_its_reasoning_request_format() {
-    for (id, format, token_budget) in OPENAI_TARGETS {
+    for (id, format, token_budget, ladder) in OPENAI_TARGETS {
         let provider = provider(id);
+        let compat = provider.openai_compat();
         assert_eq!(
-            provider.openai_compat().reasoning_format,
-            format,
+            compat.reasoning_format, format,
             "`{id}` declares its reasoning request format"
         );
         assert_eq!(format.accepts_token_budget(), token_budget.is_supported());
+        // A provider names its own effort vocabulary or names none, in which
+        // case its models fall back to the baseline ladder.
+        assert_eq!(compat.reasoning_efforts.unwrap_or(BASELINE), ladder);
     }
-    for (id, format, token_budget) in ANTHROPIC_TARGETS {
+    for (id, format, token_budget, ladder) in ANTHROPIC_TARGETS {
         let provider = provider(id);
+        let compat = provider.anthropic_compat();
         assert_eq!(
-            provider.anthropic_compat().reasoning_format,
-            format,
+            compat.reasoning_format, format,
             "`{id}` declares its reasoning request format"
         );
         assert_eq!(format.accepts_token_budget(), token_budget.is_supported());
+        assert_eq!(compat.reasoning_efforts.unwrap_or(BASELINE), ladder);
     }
 }
 
 #[test]
 fn every_target_provider_stamps_reasoning_capabilities_onto_its_models() {
     let targets = OPENAI_TARGETS
-        .map(|(id, _, budget)| (id, budget))
+        .map(|(id, _, budget, ladder)| (id, budget, ladder))
         .into_iter()
-        .chain(ANTHROPIC_TARGETS.map(|(id, _, budget)| (id, budget)));
-    for (id, token_budget) in targets {
+        .chain(ANTHROPIC_TARGETS.map(|(id, _, budget, ladder)| (id, budget, ladder)));
+    for (id, token_budget, ladder) in targets {
         let provider = provider(id);
         let models = provider.models();
         assert!(!models.is_empty(), "`{id}` should serve models");
-        let mut reasoning_models = 0;
+        let mut attesting_models = 0;
         for model in &models {
-            if model.reasoning.reasons() {
-                reasoning_models += 1;
-                assert_eq!(
-                    model.reasoning.efforts(),
-                    ReasoningCapability::BASELINE,
-                    "`{id}`/`{}` attests the baseline ladder",
-                    model.id
-                );
-                assert_eq!(
-                    model.reasoning.token_budget(),
-                    token_budget,
-                    "`{id}`/`{}` budget capability comes from the provider's declared format",
-                    model.id
-                );
-            } else {
-                // A model that does not reason cannot take a budget either.
-                assert_eq!(model.reasoning.efforts(), []);
+            if model.reasoning.efforts().is_empty() {
+                // Either the source says this model does not reason, or its
+                // provider's endpoint has no way to ask — both mean no level
+                // is requestable, and neither can take a budget.
+                assert!(!model.reasoning.reasons());
                 assert_eq!(
                     model.reasoning.token_budget(),
                     CapabilitySupport::Unsupported
                 );
+                continue;
             }
+            attesting_models += 1;
+            // A model source only says *whether* a model reasons, so the
+            // ladder comes from the provider's declared vocabulary — the
+            // baseline only where the provider names none.
+            assert_eq!(
+                model.reasoning.efforts(),
+                ladder,
+                "`{id}`/`{}` attests its provider's declared ladder",
+                model.id
+            );
+            assert_eq!(
+                model.reasoning.token_budget(),
+                token_budget,
+                "`{id}`/`{}` budget capability comes from the provider's declared format",
+                model.id
+            );
         }
-        assert!(
-            reasoning_models > 0,
-            "`{id}` should serve at least one reasoning model"
-        );
+
+        if ladder.is_empty() {
+            // Moonshot: the endpoint takes no reasoning field, so not one of
+            // its models — thinking or not — claims a requestable level.
+            assert_eq!(
+                attesting_models, 0,
+                "`{id}` declares no requestable level, so none of its models may attest one"
+            );
+        } else {
+            assert!(
+                attesting_models > 0,
+                "`{id}` should serve at least one reasoning model"
+            );
+        }
     }
 }
 
@@ -368,8 +426,10 @@ async fn rejected(provider_id: &str, options: StreamOptions, expected: &str) {
 
 #[tokio::test]
 async fn an_effort_the_model_does_not_attest_is_rejected_before_dispatch() {
-    // `xhigh` and `max` are outside the baseline ladder every target attests.
-    rejected("deepseek", reasoning(ReasoningEffort::XHigh), "xhigh").await;
+    // Which level is out of reach depends on the provider's own vocabulary:
+    // DeepSeek documents `max` but no `minimal`, while Kimi names none and so
+    // stops at the baseline ladder's `high`.
+    rejected("deepseek", reasoning(ReasoningEffort::Minimal), "minimal").await;
     rejected("kimi", reasoning(ReasoningEffort::Max), "max").await;
 }
 
@@ -433,10 +493,11 @@ async fn a_token_budget_the_model_does_not_attest_is_rejected_before_dispatch() 
 
 #[tokio::test]
 async fn a_model_attesting_a_level_beyond_the_baseline_is_honoured() {
-    // The metadata carries a *set of levels*, not a flag: no source in use
-    // attests `xhigh`, so no catalog model accepts it — but a caller who
-    // knows their model does says so, and the same request goes through. A
-    // boolean could not express the difference.
+    // The metadata carries a *set of levels*, not a flag: Xiaomi's endpoint
+    // takes no effort field, so its models sit on the baseline ladder and no
+    // catalog model of it accepts `xhigh` — but a caller who knows their model
+    // does says so, and the same request goes through. A boolean could not
+    // express the difference, and neither could a single global ladder.
     let server = MockServer::start().await;
     mount_openai_sse(&server).await;
 
