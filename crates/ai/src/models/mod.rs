@@ -7,7 +7,7 @@ pub(crate) mod dev;
 
 use serde::Deserialize;
 
-use crate::models_dev::modality_from_str;
+use crate::models_dev::{modality_from_str, reasoning_capability};
 use crate::types::{ApiKind, CapabilitySupport, Model, ModelCapabilities, ModelCost};
 
 /// One entry in a bundled `catalog/<provider>.json` file.
@@ -44,8 +44,14 @@ fn raw_catalog(provider_id: &str) -> Option<&'static str> {
 }
 
 /// Build the model list for a provider from its bundled catalog, stamping each
-/// model with the provider's id, base URL, and wire protocol.
-pub(crate) fn catalog_models(provider_id: &str, base_url: &str, api: ApiKind) -> Vec<Model> {
+/// model with the provider's id, base URL, wire protocol, and the
+/// token-budget support its declared reasoning request shape carries.
+pub(crate) fn catalog_models(
+    provider_id: &str,
+    base_url: &str,
+    api: ApiKind,
+    reasoning_token_budget: CapabilitySupport,
+) -> Vec<Model> {
     let Some(raw) = raw_catalog(provider_id) else {
         return Vec::new();
     };
@@ -59,7 +65,7 @@ pub(crate) fn catalog_models(provider_id: &str, base_url: &str, api: ApiKind) ->
             provider: provider_id.to_string(),
             base_url: base_url.to_string(),
             headers: Default::default(),
-            reasoning: entry.reasoning,
+            reasoning: reasoning_capability(entry.reasoning, reasoning_token_budget),
             input: entry
                 .input
                 .iter()
