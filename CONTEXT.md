@@ -166,6 +166,49 @@ toggle: any level above `off` reads as "enabled". `off` is spelled `none` in a
 `reasoning_effort` field — banshu's own name for the level is `off`, and the
 two are not interchangeable on the wire.
 
+The Anthropic-compatible shapes (issue #44), read the same way. Shape names are
+scoped to their protocol — Anthropic's `ThinkingToggle` is the analogue of
+OpenAI's `ThinkingToggleOnly`, since no Anthropic-compatible shape carries an
+effort string for a toggle to sit beside. All three spell `off` as
+`thinking:{"type":"disabled"}`, which is the value every one of their references
+documents; they differ only in how they say "reason":
+
+| Shape | Enabled | Declared by |
+| --- | --- | --- |
+| `ThinkingToggle` | `thinking:{"type":"enabled"}` | Kimi For Coding |
+| `ThinkingAdaptive` | `thinking:{"type":"adaptive"}` | MiniMax |
+| `ThinkingBudget` | `thinking:{"type":"enabled","budget_tokens":N}` | — (a custom provider) |
+| `Unsupported` | — refuses every request | — |
+
+No bundled vendor declares `ThinkingBudget`: neither MiniMax's nor Kimi's
+reference documents a `budget_tokens` field, and Kimi's says outright that its
+models take none. It stays because it is Anthropic's own shape, which a caller
+pointing `anthropic_compatible` at such an endpoint declares themselves.
+
+**Reasoning Budget** (`ReasoningOptions::token_budget`, `ThinkingBudget`):
+The `ThinkingBudget` shape has no effort field — there the level *is* a token
+count — so a request that names no budget spends a documented ladder derived
+from the level: 1024 for `minimal`, 2048 `low`, 8192 `medium`, 16384 `high`,
+32768 `xhigh`, 65536 `max`. `max_tokens` caps the reasoning and the answer
+together, so:
+
+- a budget the *caller* named is sent verbatim, and one that does not fit under
+  the request's final `max_tokens` — or falls below the 1024-token minimum the
+  shape documents — is refused by the Reasoning preflight before any HTTP;
+- an enabled request needs a model whose Reasoning Capability attests a token
+  budget, since on this shape a budget is the only way to say "reason";
+- a budget *banshu* derived is trimmed to leave 1024 tokens for the answer,
+  which is not the clamp this crate refuses to perform: the caller asked for a
+  level, not for a token count. An output cap with no room for both the minimum
+  budget and an answer is refused rather than sent illegal;
+- a budget alongside `off` is refused, since a disabled request sends the
+  toggle alone and would have to discard it.
+
+The final `max_tokens` is the request's, else the model's, else 4096 — the
+preflight and the wire read the same ladder, so a budget that passes the check
+is the one that ships.
+_Avoid_: thinking tokens, budget clamp
+
 **Reasoning Effort Vocabulary**
 (`OpenAiCompat::reasoning_efforts` / `AnthropicCompat::reasoning_efforts`):
 The effort levels a provider's own reference documents, declared alongside its
