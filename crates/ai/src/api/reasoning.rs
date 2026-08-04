@@ -12,20 +12,21 @@
 //! [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) instead and
 //! names the levels that would have worked.
 
+use crate::options::StreamOptions;
 use crate::provider::{AnthropicCompat, DeclaredReasoning, OpenAiCompat};
-use crate::types::{CapabilitySupport, Model, ReasoningOptions};
+use crate::types::{CapabilitySupport, Model};
 
-/// Check `reasoning` against the target model and provider. `Ok(())` means the
-/// request can be honoured — including the common case of no reasoning option
-/// at all, which leaves the payload untouched. `Err` carries the detail for an
-/// in-band `InvalidRequest`.
+/// Check `options.reasoning` against the target model and provider. `Ok(())`
+/// means the request can be honoured — including the common case of no
+/// reasoning option at all, which leaves the payload untouched. `Err` carries
+/// the detail for an in-band `InvalidRequest`.
 pub(crate) fn validate(
     model: &Model,
-    reasoning: Option<&ReasoningOptions>,
+    options: &StreamOptions,
     openai: OpenAiCompat,
     anthropic: AnthropicCompat,
 ) -> Result<(), String> {
-    let Some(reasoning) = reasoning else {
+    let Some(reasoning) = options.reasoning.as_ref() else {
         return Ok(());
     };
     let effort = reasoning.effort;
@@ -76,6 +77,13 @@ pub(crate) fn validate(
         }
     }
 
+    if format.token_budget {
+        // A budget shape spends the same `max_tokens` the answer does, so what
+        // fits is a question only the protocol that ships that field can
+        // answer. Anthropic's is the one shape that carries a budget today.
+        super::anthropic_messages::validate_thinking_budget(model, options, reasoning)?;
+    }
+
     Ok(())
 }
 
@@ -87,7 +95,7 @@ pub(crate) fn validate(
 mod tests {
     use super::*;
     use crate::provider::{AnthropicReasoningFormat, OpenAiReasoningFormat};
-    use crate::types::{ApiKind, ReasoningCapability, ReasoningEffort};
+    use crate::types::{ApiKind, ReasoningCapability, ReasoningEffort, ReasoningOptions};
 
     fn openai_format(format: OpenAiReasoningFormat) -> OpenAiCompat {
         OpenAiCompat {
@@ -110,10 +118,21 @@ mod tests {
         model
     }
 
-    fn check(model: &Model, reasoning: Option<&ReasoningOptions>) -> Result<(), String> {
+    /// A request asking for `reasoning`, under an output cap with room for any
+    /// budget: what fits under a *small* cap is the budget-shape rule, pinned
+    /// end-to-end in `tests/anthropic_reasoning_requests.rs`.
+    fn asked(reasoning: Option<ReasoningOptions>) -> StreamOptions {
+        StreamOptions {
+            max_tokens: Some(32_000),
+            reasoning,
+            ..StreamOptions::default()
+        }
+    }
+
+    fn check(model: &Model, reasoning: Option<ReasoningOptions>) -> Result<(), String> {
         validate(
             model,
-            reasoning,
+            &asked(reasoning),
             openai_format(OpenAiReasoningFormat::ReasoningEffort),
             anthropic_format(AnthropicReasoningFormat::ThinkingBudget),
         )
@@ -126,7 +145,7 @@ mod tests {
         assert_eq!(
             validate(
                 &model,
-                None,
+                &asked(None),
                 OpenAiCompat::default(),
                 AnthropicCompat::default()
             ),
@@ -139,7 +158,7 @@ mod tests {
     fn a_rejection_names_the_levels_that_would_have_worked() {
         let attested = model(ReasoningCapability::baseline());
         for effort in [ReasoningEffort::XHigh, ReasoningEffort::Max] {
-            let error = check(&attested, Some(&ReasoningOptions::new(effort)))
+            let error = check(&attested, Some(ReasoningOptions::new(effort)))
                 .expect_err("the baseline ladder stops at `high`");
             assert!(error.contains(effort.as_str()), "{error}");
             assert!(
@@ -150,7 +169,7 @@ mod tests {
 
         // A model attesting nothing says so rather than printing an empty list.
         let nothing = model(ReasoningCapability::none());
-        let error = check(&nothing, Some(&ReasoningOptions::new(ReasoningEffort::Low)))
+        let error = check(&nothing, Some(ReasoningOptions::new(ReasoningEffort::Low)))
             .expect_err("nothing attested means nothing accepted");
         assert!(error.contains("attested levels: none"), "{error}");
     }
@@ -162,14 +181,15 @@ mod tests {
         // The OpenAI-compatible shapes carry no budget field.
         let attested =
             model(ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported));
-        let error = check(&attested, Some(&requested)).expect_err("no budget field on this format");
+        let error =
+            check(&attested, Some(requested.clone())).expect_err("no budget field on this format");
         assert!(error.contains("carries no token budget"), "{error}");
 
         // A format that carries one, but a model that does not attest it.
         let mut unattested = model(ReasoningCapability::baseline());
         unattested.api = ApiKind::AnthropicMessages;
-        let error =
-            check(&unattested, Some(&requested)).expect_err("the model attests no budget support");
+        let error = check(&unattested, Some(requested.clone()))
+            .expect_err("the model attests no budget support");
         assert!(
             error.contains("does not support a reasoning token budget"),
             "{error}"
@@ -178,7 +198,7 @@ mod tests {
         // Both declared: honoured.
         let mut both = attested;
         both.api = ApiKind::AnthropicMessages;
-        assert_eq!(check(&both, Some(&requested)), Ok(()));
+        assert_eq!(check(&both, Some(requested)), Ok(()));
     }
 
     #[test]
@@ -187,13 +207,13 @@ mod tests {
         // its own. Here only the Anthropic side is declared.
         let mut model = model(ReasoningCapability::baseline());
         model.api = ApiKind::AnthropicMessages;
-        let requested = ReasoningOptions::new(ReasoningEffort::High);
+        let requested = asked(Some(ReasoningOptions::new(ReasoningEffort::High)));
         assert_eq!(
             validate(
                 &model,
-                Some(&requested),
+                &requested,
                 OpenAiCompat::default(),
-                anthropic_format(AnthropicReasoningFormat::ThinkingEffort),
+                anthropic_format(AnthropicReasoningFormat::ThinkingAdaptive),
             ),
             Ok(())
         );
@@ -202,9 +222,9 @@ mod tests {
         assert!(
             validate(
                 &model,
-                Some(&requested),
+                &requested,
                 OpenAiCompat::default(),
-                anthropic_format(AnthropicReasoningFormat::ThinkingEffort),
+                anthropic_format(AnthropicReasoningFormat::ThinkingAdaptive),
             )
             .is_err()
         );

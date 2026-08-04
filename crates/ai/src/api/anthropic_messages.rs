@@ -16,10 +16,11 @@ use super::{PreparedRequest, ProtocolAdapter, ProtocolEventStream, compute_cost}
 use crate::CacheRetention;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
-use crate::provider::AnthropicCompat;
+use crate::provider::{AnthropicCompat, AnthropicReasoningFormat};
 use crate::types::{
-    ApiKind, AssistantContent, Context, Message, Model, StopReason, ThinkingContent,
-    ToolResultMessage, Usage, UserContent, UserMessage,
+    ApiKind, AssistantContent, CapabilitySupport, Context, Message, Model, ReasoningEffort,
+    ReasoningOptions, StopReason, ThinkingContent, ToolResultMessage, Usage, UserContent,
+    UserMessage,
 };
 
 /// The Anthropic Messages wire protocol.
@@ -27,6 +28,11 @@ pub struct AnthropicMessages;
 
 pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// The smallest reasoning budget Anthropic's `budget_tokens` shape documents,
+/// and — because `max_tokens` caps the thinking *and* the answer — the room
+/// banshu keeps for the answer when it derives a budget of its own.
+const MIN_THINKING_BUDGET: u32 = 1024;
 
 impl ProtocolAdapter for AnthropicMessages {
     fn kind(&self) -> ApiKind {
@@ -325,6 +331,157 @@ fn replay_thinking(block: &ThinkingContent, compat: AnthropicCompat) -> Option<V
     }
 }
 
+/// The output cap this request will ship: the caller's, else the model's, else
+/// the crate default.
+///
+/// The [reasoning preflight](super::reasoning) measures a reasoning budget
+/// against the value this returns, so it and [`build_request_body`] must read
+/// the same ladder — a budget judged against a different cap could pass the
+/// check and still be refused by the endpoint.
+pub(crate) fn final_max_tokens(model: &Model, options: &crate::StreamOptions) -> u32 {
+    options
+        .max_tokens
+        .or(Some(model.max_tokens).filter(|&n| n > 0))
+        .unwrap_or(DEFAULT_MAX_TOKENS)
+}
+
+/// The budget each effort level spends when the caller names none: 1024 for
+/// `minimal`, 2048 for `low`, 8192 for `medium`, 16384 for `high`, and 32768 /
+/// 65536 for the two levels above it.
+///
+/// The budget shape has no effort field — here the level *is* a token count —
+/// so a request for `high` has to become a number somewhere. This ladder is
+/// banshu's own, climbing from the minimum the shape documents; a caller who
+/// wants an exact number sets
+/// [`ReasoningOptions::token_budget`](crate::ReasoningOptions::token_budget),
+/// which is then sent verbatim.
+const fn derived_thinking_budget(effort: ReasoningEffort) -> u32 {
+    match effort {
+        // Unreachable: `Off` sends the disabling toggle and no budget at all.
+        ReasoningEffort::Off => MIN_THINKING_BUDGET,
+        ReasoningEffort::Minimal => MIN_THINKING_BUDGET,
+        ReasoningEffort::Low => 2 * MIN_THINKING_BUDGET,
+        ReasoningEffort::Medium => 8 * MIN_THINKING_BUDGET,
+        ReasoningEffort::High => 16 * MIN_THINKING_BUDGET,
+        ReasoningEffort::XHigh => 32 * MIN_THINKING_BUDGET,
+        ReasoningEffort::Max => 64 * MIN_THINKING_BUDGET,
+    }
+}
+
+/// The `budget_tokens` an enabled [`ThinkingBudget`](AnthropicReasoningFormat)
+/// request puts on the wire, or the reason it cannot be expressed.
+///
+/// A budget the caller named is never trimmed to fit — that would answer a
+/// question they did not ask — so one that does not fit is refused. A budget
+/// *banshu* derived is trimmed, because the caller asked for a level, not for a
+/// token count.
+fn thinking_budget(reasoning: &ReasoningOptions, max_tokens: u32) -> Result<u32, String> {
+    if let Some(tokens) = reasoning.token_budget {
+        if tokens < MIN_THINKING_BUDGET {
+            return Err(format!(
+                "a reasoning budget of {tokens} is below the {MIN_THINKING_BUDGET} tokens \
+                 this request format documents as its minimum",
+            ));
+        }
+        if tokens >= max_tokens {
+            return Err(format!(
+                "a reasoning budget of {tokens} does not fit under this request's max_tokens \
+                 of {max_tokens}, which caps the reasoning and the answer together",
+            ));
+        }
+        return Ok(tokens);
+    }
+    let room = max_tokens.saturating_sub(MIN_THINKING_BUDGET);
+    if room < MIN_THINKING_BUDGET {
+        return Err(format!(
+            "this request's max_tokens of {max_tokens} has no room for both the \
+             {MIN_THINKING_BUDGET}-token minimum reasoning budget and an answer",
+        ));
+    }
+    Ok(derived_thinking_budget(reasoning.effort).min(room))
+}
+
+/// The [reasoning preflight](super::reasoning) check this protocol adds: an
+/// enabled budget-shape request has to name — or be able to derive — a budget
+/// that fits under the `max_tokens` the request will ship with, on a model that
+/// attests a budget may be spent at all.
+///
+/// Called only where the provider's declared shape carries a budget, so a
+/// request reaching [`build_request_body`] always has one to send.
+pub(crate) fn validate_thinking_budget(
+    model: &Model,
+    options: &crate::StreamOptions,
+    reasoning: &ReasoningOptions,
+) -> Result<(), String> {
+    if reasoning.effort == ReasoningEffort::Off {
+        // A disabled request sends the toggle alone, so a budget alongside it
+        // could only be silently discarded.
+        return match reasoning.token_budget {
+            Some(tokens) => Err(format!(
+                "a reasoning budget of {tokens} cannot be requested alongside effort `off`, \
+                 which disables reasoning outright",
+            )),
+            None => Ok(()),
+        };
+    }
+    // This shape enables reasoning *by* spending a budget, so a model that
+    // attests none cannot make an enabled request at all — not even one that
+    // leaves the number to banshu. The preflight's own budget check only sees
+    // budgets the caller named.
+    if model.reasoning.token_budget() != CapabilitySupport::Supported {
+        return Err(format!(
+            "model `{}` does not support a reasoning token budget, and the reasoning request \
+             format declared by provider `{}` can only enable reasoning by spending one",
+            model.id, model.provider,
+        ));
+    }
+    thinking_budget(reasoning, final_max_tokens(model, options)).map(drop)
+}
+
+/// Map a reasoning request onto the `thinking` field `format` declares, or
+/// `None` when the payload carries no reasoning at all.
+///
+/// The [reasoning preflight](super::reasoning) has already refused anything
+/// this cannot express — an undeclared format, an effort the model does not
+/// attest, a budget on a shape that carries none or one that does not fit — so
+/// every request reaching here is one the endpoint accepts, and nothing is
+/// clamped or dropped on the way out.
+fn thinking_wire(
+    format: AnthropicReasoningFormat,
+    reasoning: Option<&ReasoningOptions>,
+    max_tokens: u32,
+) -> Option<ThinkingRequest> {
+    // No request means no override: the payload is byte-identical to one built
+    // before reasoning options existed.
+    let reasoning = reasoning?;
+    match format {
+        // Unreachable in practice — the preflight refuses every reasoning
+        // request against a provider declaring no shape. Sending nothing is the
+        // honest fallback if that ever changes.
+        AnthropicReasoningFormat::Unsupported => None,
+        // Every declared shape spells "do not reason" the same way, and
+        // omitting the field would leave a thinking model thinking.
+        _ if reasoning.effort == ReasoningEffort::Off => Some(ThinkingRequest::disabled()),
+        AnthropicReasoningFormat::ThinkingToggle => Some(ThinkingRequest::enabled()),
+        AnthropicReasoningFormat::ThinkingAdaptive => Some(ThinkingRequest::adaptive()),
+        AnthropicReasoningFormat::ThinkingBudget => {
+            let budget = thinking_budget(reasoning, max_tokens);
+            debug_assert!(
+                budget.is_ok(),
+                "the reasoning preflight should have refused this request: {budget:?}",
+            );
+            // A budget that cannot be computed is a preflight bug, not a wire
+            // decision. Send the disabling toggle rather than omit the field:
+            // an omission reads as the endpoint's own default, which is the one
+            // answer nobody asked for.
+            Some(budget.map_or_else(
+                |_| ThinkingRequest::disabled(),
+                ThinkingRequest::with_budget,
+            ))
+        }
+    }
+}
+
 /// Map an Anthropic `stop_reason` to a banshu [`StopReason`].
 fn map_stop_reason(reason: &str) -> StopReason {
     match reason {
@@ -462,10 +619,7 @@ fn build_request_body(
         }
     }
 
-    let max_tokens = options
-        .max_tokens
-        .or(Some(model.max_tokens).filter(|&n| n > 0))
-        .unwrap_or(DEFAULT_MAX_TOKENS);
+    let max_tokens = final_max_tokens(model, options);
 
     // System prompt goes out as a text block so it can carry a breakpoint.
     let system = context.system_prompt.as_ref().map(|text| {
@@ -499,6 +653,11 @@ fn build_request_body(
         tools,
         stream: true,
         temperature: options.temperature,
+        thinking: thinking_wire(
+            compat.reasoning_format,
+            options.reasoning.as_ref(),
+            max_tokens,
+        ),
     }
 }
 
@@ -514,6 +673,53 @@ struct MessagesRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingRequest>,
+}
+
+/// The `thinking` request object, the whole of banshu's Anthropic-compatible
+/// reasoning request surface. `budget_tokens` rides along only on the shape
+/// that declares it.
+#[derive(Serialize)]
+struct ThinkingRequest {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget_tokens: Option<u32>,
+}
+
+impl ThinkingRequest {
+    /// The disabling value every declared shape documents.
+    fn disabled() -> Self {
+        Self {
+            kind: "disabled",
+            budget_tokens: None,
+        }
+    }
+
+    /// The bare toggle, for a shape that says "reason" with nothing else.
+    fn enabled() -> Self {
+        Self {
+            kind: "enabled",
+            budget_tokens: None,
+        }
+    }
+
+    /// The adaptive shape, which hands the model the decision.
+    fn adaptive() -> Self {
+        Self {
+            kind: "adaptive",
+            budget_tokens: None,
+        }
+    }
+
+    /// The budget shape, which enables reasoning by spending tokens on it.
+    fn with_budget(budget_tokens: u32) -> Self {
+        Self {
+            kind: "enabled",
+            budget_tokens: Some(budget_tokens),
+        }
+    }
 }
 
 #[derive(Serialize)]

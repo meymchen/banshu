@@ -13,8 +13,10 @@
 //!
 //! A request that none of the three can honour terminates in-band with
 //! `ErrorKind::InvalidRequest` before any HTTP request leaves the process.
-//! Serializing an honoured request onto each wire shape is issues #43 and #44;
-//! this file pins that the no-reasoning payload has not moved in the meantime.
+//! Serializing an honoured request onto each wire shape belongs to
+//! `openai_reasoning_requests.rs` (issue #43) and
+//! `anthropic_reasoning_requests.rs` (issue #44); this file stays on the
+//! contract, and pins that the no-reasoning payload has not moved.
 
 use banshu_ai::{
     AnthropicReasoningFormat, CapabilitySupport, Context, ErrorKind, Model, OpenAiReasoningFormat,
@@ -96,7 +98,10 @@ const OPENAI_TARGETS: [(
     ),
 ];
 
-/// The two Anthropic-compatible targets, same shape.
+/// The two Anthropic-compatible targets, same shape. Neither endpoint's
+/// reference documents a `budget_tokens` field — MiniMax enables thinking with
+/// `adaptive` and Kimi with the bare toggle — so neither takes a budget, and
+/// neither carries an effort field to constrain either.
 const ANTHROPIC_TARGETS: [(
     &str,
     AnthropicReasoningFormat,
@@ -105,14 +110,14 @@ const ANTHROPIC_TARGETS: [(
 ); 2] = [
     (
         "minimax",
-        AnthropicReasoningFormat::ThinkingBudget,
-        CapabilitySupport::Supported,
+        AnthropicReasoningFormat::ThinkingAdaptive,
+        CapabilitySupport::Unsupported,
         BASELINE,
     ),
     (
         "kimi",
-        AnthropicReasoningFormat::ThinkingBudget,
-        CapabilitySupport::Supported,
+        AnthropicReasoningFormat::ThinkingToggle,
+        CapabilitySupport::Unsupported,
         BASELINE,
     ),
 ];
@@ -127,6 +132,24 @@ fn provider(id: &str) -> Provider {
         "kimi" => Provider::kimi(),
         other => panic!("`{other}` is not one of the six target providers"),
     }
+}
+
+/// A custom provider declaring Anthropic's budget shape — the one shape in the
+/// crate that carries a token budget, and one no bundled vendor declares. Its
+/// wire output is pinned in `anthropic_reasoning_requests.rs`; here it is only
+/// the vehicle for the budget checks that are about the *model*.
+fn budget_provider(server: &MockServer) -> Provider {
+    Provider::anthropic_compatible("custom", "Custom", server.uri(), ["TEST_API_KEY"])
+        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingBudget)
+}
+
+/// A caller-supplied model of [`budget_provider`], attesting the baseline
+/// ladder and whatever `token_budget` support the test needs.
+fn budget_model(server: &MockServer, token_budget: CapabilitySupport) -> Model {
+    let mut model = Model::anthropic_messages("custom-thinker").with_base_url(server.uri());
+    model.provider = "custom".into();
+    model.reasoning = ReasoningCapability::baseline().with_token_budget(token_budget);
+    model
 }
 
 fn options() -> StreamOptions {
@@ -536,21 +559,19 @@ async fn a_model_attesting_a_level_beyond_the_baseline_is_honoured() {
 
 #[tokio::test]
 async fn the_model_budget_check_is_separate_from_the_providers_format() {
-    // Kimi's declared shape *does* carry a budget, so the format check
-    // passes — this is the model-side check firing on its own, for a
-    // caller-supplied model that attests no budget support.
+    // The custom provider's declared shape *does* carry a budget, so the
+    // format check passes — this is the model-side check firing on its own,
+    // for a caller-supplied model that attests no budget support.
     let server = MockServer::start().await;
     mount_anthropic_sse(&server).await;
 
-    let mut model = Model::anthropic_messages("custom-thinker").with_base_url(server.uri());
-    model.provider = "kimi".into();
-    model.reasoning = ReasoningCapability::baseline();
-
-    let message = Provider::kimi()
+    let provider = budget_provider(&server);
+    let model = budget_model(&server, CapabilitySupport::Unknown);
+    let message = provider
         .stream(
             &model,
             &Context::new().user("hi"),
-            &budget(ReasoningEffort::High, 4096),
+            &budget(ReasoningEffort::High, 2048),
         )
         .finish()
         .await;
@@ -562,12 +583,13 @@ async fn the_model_budget_check_is_separate_from_the_providers_format() {
             .unwrap_or_default()
             .contains("does not support a reasoning token budget")
     );
-    // The same model without a budget is fine, so only the budget was refused.
-    let allowed = Provider::kimi()
+    // Turning reasoning *off* on the same model is fine — a disabled request
+    // spends no budget — so it is the budget that was refused, not the model.
+    let allowed = provider
         .stream(
             &model,
             &Context::new().user("hi"),
-            &reasoning(ReasoningEffort::High),
+            &reasoning(ReasoningEffort::Off),
         )
         .finish()
         .await;
@@ -580,13 +602,13 @@ async fn an_attested_effort_and_budget_reach_the_endpoint() {
     let server = MockServer::start().await;
     mount_anthropic_sse(&server).await;
 
-    let provider = Provider::kimi();
-    let model = reasoning_model(&provider, &server);
+    let provider = budget_provider(&server);
+    let model = budget_model(&server, CapabilitySupport::Supported);
     let message = provider
         .stream(
             &model,
             &Context::new().user("hi"),
-            &budget(ReasoningEffort::High, 4096),
+            &budget(ReasoningEffort::High, 2048),
         )
         .finish()
         .await;

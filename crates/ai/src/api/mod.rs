@@ -239,12 +239,9 @@ pub(crate) fn drive(
         // attested capability, and the provider's declared request shape, so
         // it runs first: a request nothing can honour fails before any work
         // is done on its behalf.
-        if let Err(detail) = reasoning::validate(
-            &model,
-            options.reasoning.as_ref(),
-            openai_compat,
-            anthropic_compat,
-        ) {
+        if let Err(detail) =
+            reasoning::validate(&model, &options, openai_compat, anthropic_compat)
+        {
             yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
             return;
         }

@@ -125,20 +125,42 @@ impl OpenAiReasoningFormat {
 }
 
 /// The reasoning request shape an Anthropic-compatible endpoint accepts. Like
-/// [`OpenAiReasoningFormat`], always declared and never inferred.
+/// [`OpenAiReasoningFormat`], always declared and never inferred, and named for
+/// the fields it puts on the wire rather than for a vendor.
+///
+/// Every shape spells "do not reason" the same way —
+/// `thinking: { "type": "disabled" }` — because that is the value all three
+/// references document; they differ only in how they say "reason".
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AnthropicReasoningFormat {
-    /// The endpoint takes no `thinking` request field. The default.
+    /// The endpoint takes no `thinking` request field. Any reasoning request
+    /// against this provider is refused; a model that reasons on its own still
+    /// streams its thinking back. The default, because an unconfigured
+    /// endpoint attests nothing.
     #[default]
     Unsupported,
-    /// Anthropic's `thinking: { "type": "enabled", "budget_tokens": N }` /
-    /// `{ "type": "disabled" }` pair, where effort is expressed as a token
-    /// budget.
+    /// The `thinking: { "type": "enabled" }` toggle and nothing else: no
+    /// budget, no effort, so any level above [`ReasoningEffort::Off`] reads as
+    /// "enabled".
+    ///
+    /// Declared by [`Provider::kimi`].
+    ThinkingToggle,
+    /// Anthropic's `thinking: { "type": "enabled", "budget_tokens": N }`,
+    /// where effort is expressed as a token budget. The budget shares the
+    /// request's `max_tokens` with the answer, so one that does not fit under
+    /// it is refused by the [reasoning
+    /// preflight](crate::api) before dispatch.
+    ///
+    /// No vendor banshu bundles declares this shape; a caller pointing
+    /// [`Provider::anthropic_compatible`] at an endpoint that documents
+    /// `budget_tokens` declares it themselves.
     ThinkingBudget,
-    /// Anthropic's adaptive shape, `thinking: { "type": "enabled",
-    /// "effort": "low" | "medium" | "high" }`, which takes no budget.
-    ThinkingEffort,
+    /// Anthropic's adaptive shape, `thinking: { "type": "adaptive" }`, which
+    /// hands the model the decision and takes neither a budget nor an effort.
+    ///
+    /// Declared by [`Provider::minimax`].
+    ThinkingAdaptive,
 }
 
 impl AnthropicReasoningFormat {
@@ -454,7 +476,16 @@ impl Provider {
 
     /// MiniMax — Anthropic-compatible, `MINIMAX_API_KEY`.
     ///
-    /// Reasoning: Anthropic's `thinking` block with a token budget.
+    /// Reasoning: the adaptive `thinking` shape. MiniMax's own
+    /// Anthropic-compatible reference enables thinking with
+    /// `thinking: { "type": "adaptive" }` and documents no `budget_tokens` and
+    /// no effort field, so banshu sends neither.
+    ///
+    /// Its reference also states that M2.x models keep thinking even when sent
+    /// `{ "type": "disabled" }`. banshu still sends the disabling value a
+    /// request for [`Off`](ReasoningEffort::Off) asks for — the endpoint
+    /// accepts it, and what the model then does with it is documented by
+    /// MiniMax, not decided here.
     pub fn minimax() -> Self {
         Self::anthropic_compatible(
             "minimax",
@@ -462,7 +493,7 @@ impl Provider {
             "https://api.minimax.io/anthropic",
             ["MINIMAX_API_KEY"],
         )
-        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingBudget)
+        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingAdaptive)
         .with_models_dev_id("minimax")
     }
 
@@ -489,7 +520,12 @@ impl Provider {
 
     /// Kimi For Coding — Anthropic-compatible, `KIMI_API_KEY`.
     ///
-    /// Reasoning: Anthropic's `thinking` block with a token budget.
+    /// Reasoning: the bare `thinking` toggle. Kimi's reference switches
+    /// thinking with `thinking: { "type": … }` and states outright that its
+    /// models take no `budget_tokens`; the graded `reasoning_effort` its newest
+    /// model accepts is a top-level field of Kimi's *OpenAI-compatible*
+    /// platform API, not of the coding endpoint's Anthropic shape, so no effort
+    /// rides along here.
     pub fn kimi() -> Self {
         Self::anthropic_compatible(
             "kimi",
@@ -497,7 +533,7 @@ impl Provider {
             "https://api.kimi.com/coding",
             ["KIMI_API_KEY"],
         )
-        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingBudget)
+        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingToggle)
         .with_models_dev_id("kimi-for-coding")
     }
 
