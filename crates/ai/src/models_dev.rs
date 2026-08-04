@@ -13,7 +13,7 @@
 
 use serde_json::Value;
 
-use crate::types::{CapabilitySupport, Modality, ModelCost, ReasoningCapability};
+use crate::types::{CapabilitySupport, Modality, ModelCost, ReasoningCapability, ReasoningEffort};
 
 /// A models.dev model entry mapped onto banshu's metadata vocabulary. Carries
 /// no provider identity — the caller stamps `provider`/`base_url`/`api`.
@@ -49,25 +49,35 @@ impl ModelsDevModel {
     }
 }
 
-/// Map a models.dev-style `reasoning` boolean plus the owning provider's
-/// declared token-budget support onto a [`ReasoningCapability`].
+/// Map a models.dev-style `reasoning` boolean plus what the owning provider
+/// declares about its endpoint onto a [`ReasoningCapability`].
 ///
-/// `true` attests the [`ReasoningCapability::BASELINE`] ladder and nothing
-/// more: models.dev names no effort levels, so `xhigh` and `max` stay
-/// unattested rather than assumed, and the budget capability comes from the
-/// provider's declared request shape. `false` attests no level at all, and a
-/// model that does not reason cannot take a reasoning budget either.
+/// A model metadata source says only *whether* a model reasons, never which
+/// levels it takes — so the ladder has to come from somewhere else, and the
+/// only honest source is the provider's own reference. `efforts` carries what
+/// that reference documents; `None` means the provider names no vocabulary and
+/// the model falls back to the [`BASELINE`](ReasoningCapability::BASELINE)
+/// ladder, which is right for an endpoint whose request shape has no effort
+/// field to constrain.
+///
+/// `false` attests no level at all, and a model that does not reason cannot
+/// take a reasoning budget either.
 ///
 /// Both the bundled catalog and the runtime Catalog Refresh go through here,
 /// so the two can never disagree about what a `reasoning` flag means.
 pub fn reasoning_capability(
     reasoning: bool,
     token_budget: CapabilitySupport,
+    efforts: Option<&[ReasoningEffort]>,
 ) -> ReasoningCapability {
     if !reasoning {
         return ReasoningCapability::none().with_token_budget(CapabilitySupport::Unsupported);
     }
-    ReasoningCapability::baseline().with_token_budget(token_budget)
+    let ladder = match efforts {
+        Some(efforts) => ReasoningCapability::new(efforts.iter().copied()),
+        None => ReasoningCapability::baseline(),
+    };
+    ladder.with_token_budget(token_budget)
 }
 
 /// Map models.dev `tool_call` onto [`CapabilitySupport`]: `true` → Supported,

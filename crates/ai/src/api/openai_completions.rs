@@ -14,10 +14,11 @@ use super::{PreparedRequest, ProtocolAdapter, ProtocolEventStream, compute_cost}
 use crate::CacheRetention;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
-use crate::provider::{OpenAiCompat, OpenAiPromptCaching};
+use crate::provider::{OpenAiCompat, OpenAiPromptCaching, OpenAiReasoningFormat};
 use crate::types::{
-    ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model, StopReason,
-    ThinkingContent, Usage, UserContent, UserMessage,
+    ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model,
+    ReasoningEffort, ReasoningOptions, StopReason, ThinkingContent, Usage, UserContent,
+    UserMessage,
 };
 
 /// The OpenAI-completions wire protocol.
@@ -350,6 +351,78 @@ fn normalize_usage(raw: &ChunkUsage) -> Usage {
     }
 }
 
+/// The reasoning fields one request puts on the wire — the whole of banshu's
+/// OpenAI-compatible reasoning request surface.
+///
+/// Both fields `None` means the payload carries no reasoning at all, which is
+/// what the absence of a reasoning option must produce.
+#[derive(Default)]
+struct ReasoningWire {
+    /// The `thinking: { "type": … }` toggle.
+    thinking: Option<ThinkingToggle>,
+    /// The top-level `reasoning_effort` string.
+    effort: Option<&'static str>,
+}
+
+/// How `effort` is spelled inside a `reasoning_effort` field.
+///
+/// Every level is its own name except [`ReasoningEffort::Off`]: banshu's ladder
+/// calls it `off`, while the endpoints that take a bare effort string spell the
+/// same level `none`. They are not interchangeable on the wire, so the
+/// translation happens here rather than in [`ReasoningEffort::as_str`], which
+/// is banshu's own stable name for the level.
+const fn effort_wire_value(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::Off => "none",
+        other => other.as_str(),
+    }
+}
+
+/// Map a reasoning request onto the wire fields `format` declares.
+///
+/// The [reasoning preflight](crate::api::reasoning) has already refused
+/// anything this cannot express — an undeclared format, an effort the model
+/// does not attest, a token budget (no OpenAI-compatible shape carries one) —
+/// so every request reaching here is one the endpoint accepts. That is why a
+/// level is never clamped or dropped here: by this point there is nothing left
+/// to decide except how to spell it.
+fn reasoning_wire(
+    format: OpenAiReasoningFormat,
+    reasoning: Option<&ReasoningOptions>,
+) -> ReasoningWire {
+    // No request means no override: the payload is byte-identical to one built
+    // before reasoning options existed.
+    let Some(reasoning) = reasoning else {
+        return ReasoningWire::default();
+    };
+    let enabled = reasoning.effort > ReasoningEffort::Off;
+    let toggle = Some(ThinkingToggle::for_enabled(enabled));
+
+    match format {
+        // Unreachable in practice — the preflight refuses every reasoning
+        // request against a provider declaring no shape. Sending nothing is
+        // the honest fallback if that ever changes.
+        OpenAiReasoningFormat::Unsupported => ReasoningWire::default(),
+        OpenAiReasoningFormat::ReasoningEffort => ReasoningWire {
+            thinking: None,
+            effort: Some(effort_wire_value(reasoning.effort)),
+        },
+        // The toggle is what disables here, so `Off` sends it alone: an effort
+        // string alongside `"disabled"` would be a second, contradictory
+        // answer to the same question.
+        OpenAiReasoningFormat::ThinkingToggle => ReasoningWire {
+            thinking: toggle,
+            effort: enabled.then(|| effort_wire_value(reasoning.effort)),
+        },
+        // The shape carries no effort field at all; the ladder collapses onto
+        // the toggle.
+        OpenAiReasoningFormat::ThinkingToggleOnly => ReasoningWire {
+            thinking: toggle,
+            effort: None,
+        },
+    }
+}
+
 fn clamp_openai_prompt_cache_key(key: &str) -> String {
     key.chars()
         .take(OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)
@@ -532,6 +605,8 @@ fn build_request_body(
     let openai_cache = compat.prompt_caching == OpenAiPromptCaching::OpenAi
         && cache_retention != CacheRetention::Disabled;
 
+    let reasoning = reasoning_wire(compat.reasoning_format, options.reasoning.as_ref());
+
     ChatRequest {
         model: model.id.clone(),
         messages,
@@ -552,6 +627,8 @@ fn build_request_body(
             .flatten(),
         prompt_cache_retention: (openai_cache && cache_retention == CacheRetention::Long)
             .then_some("24h"),
+        thinking: reasoning.thinking,
+        reasoning_effort: reasoning.effort,
     }
 }
 
@@ -571,6 +648,26 @@ struct ChatRequest {
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_retention: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingToggle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
+}
+
+/// The `thinking: { "type": "enabled" | "disabled" }` object DeepSeek, Xiaomi
+/// MiMo, and Z.AI all use to switch reasoning on and off.
+#[derive(Serialize)]
+struct ThinkingToggle {
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+impl ThinkingToggle {
+    fn for_enabled(enabled: bool) -> Self {
+        Self {
+            kind: if enabled { "enabled" } else { "disabled" },
+        }
+    }
 }
 
 #[derive(Serialize)]
