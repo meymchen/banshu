@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/meymchen/banshu/compare/v0.3.0...v0.4.0) - 2026-08-04
+
+### Added
+
+- *(ai)* [**breaking**] map reasoning controls onto Anthropic-compatible providers ([#44](https://github.com/meymchen/banshu/pull/44)) ([#66](https://github.com/meymchen/banshu/pull/66))
+- *(ai)* [**breaking**] map reasoning controls onto OpenAI-compatible providers ([#65](https://github.com/meymchen/banshu/pull/65))
+- *(ai)* [**breaking**] model reasoning capabilities explicitly ([#64](https://github.com/meymchen/banshu/pull/64))
+- *(ai)* repair incomplete tool history before replay ([#63](https://github.com/meymchen/banshu/pull/63))
+- *(ai)* normalize cross-model reasoning and tool-call identities ([#40](https://github.com/meymchen/banshu/pull/40)) ([#62](https://github.com/meymchen/banshu/pull/62))
+- *(ai)* add immutable context normalization ([#61](https://github.com/meymchen/banshu/pull/61))
+
+### Other
+
+- replace dangling PRD §-references with issue numbers ([#37](https://github.com/meymchen/banshu/pull/37))
+
 ## [0.3.0](https://github.com/meymchen/banshu/compare/v0.1.0...v0.3.0) - 2026-07-28
 
 ### Added
