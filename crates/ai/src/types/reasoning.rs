@@ -28,9 +28,10 @@ use crate::types::CapabilitySupport;
 /// sends as its own disabling value. The absence of a request is
 /// `StreamOptions::reasoning == None`, which leaves the payload untouched.
 ///
-/// [`XHigh`](Self::XHigh) and [`Max`](Self::Max) sit above the ladder every
-/// current metadata source attests, so they are only ever accepted by a model
-/// that names them explicitly.
+/// [`XHigh`](Self::XHigh) and [`Max`](Self::Max) sit above the ladder a model
+/// metadata source can attest on its own, so they are only ever accepted where
+/// something names them explicitly — a provider's declared effort vocabulary,
+/// or a caller-supplied [`ReasoningCapability`].
 #[non_exhaustive]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
@@ -140,11 +141,16 @@ pub struct ReasoningCapability {
 }
 
 impl ReasoningCapability {
-    /// The levels attested for a model whose source says only "this model
-    /// reasons": [`Off`](ReasoningEffort::Off) through
-    /// [`High`](ReasoningEffort::High). [`XHigh`](ReasoningEffort::XHigh) and
-    /// [`Max`](ReasoningEffort::Max) are deliberately absent — no metadata
-    /// source in use attests them, and guessing would defeat the point.
+    /// The fallback ladder for a model whose source says only "this model
+    /// reasons" and whose provider declares no vocabulary of its own:
+    /// [`Off`](ReasoningEffort::Off) through [`High`](ReasoningEffort::High).
+    /// [`XHigh`](ReasoningEffort::XHigh) and [`Max`](ReasoningEffort::Max) are
+    /// deliberately absent — no *model* metadata source in use attests them,
+    /// and guessing would defeat the point.
+    ///
+    /// A provider that documents its own effort vocabulary replaces this
+    /// entirely, in either direction; see
+    /// [`OpenAiCompat::reasoning_efforts`](crate::OpenAiCompat::reasoning_efforts).
     pub const BASELINE: [ReasoningEffort; 5] = [
         ReasoningEffort::Off,
         ReasoningEffort::Minimal,

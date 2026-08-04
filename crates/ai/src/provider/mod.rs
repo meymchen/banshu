@@ -18,7 +18,32 @@ use crate::auth::{Auth, AuthResolver, ProviderHeaders};
 use crate::discovery::{RefreshEntry, RefreshOutcome};
 use crate::options::StreamOptions;
 use crate::stream::MessageStream;
-use crate::types::{ApiKind, CapabilitySupport, Context, Model};
+use crate::types::{ApiKind, CapabilitySupport, Context, Model, ReasoningEffort};
+
+/// The effort levels DeepSeek's chat-completions reference documents for
+/// `reasoning_effort`: `low`, `high`, and `max`, plus
+/// [`Off`](ReasoningEffort::Off), which rides the `thinking` toggle rather than
+/// the effort string.
+///
+/// `medium` and `xhigh` are deliberately absent even though the endpoint
+/// accepts them: it accepts them by *mapping them onto `high`* "for
+/// compatibility". Attesting a level that silently becomes a different one
+/// would move the clamp this crate refuses to perform onto the server, where
+/// the caller cannot see it — the preflight would pass, the request would
+/// succeed, and the answer would come back at an effort nobody asked for.
+/// Refusing says so. `minimal` appears nowhere in the reference at all.
+const DEEPSEEK_REASONING_EFFORTS: &[ReasoningEffort] = &[
+    ReasoningEffort::Off,
+    ReasoningEffort::Low,
+    ReasoningEffort::High,
+    ReasoningEffort::Max,
+];
+
+/// A provider whose endpoint has no reasoning request field documents no
+/// effort level either — not even [`Off`](ReasoningEffort::Off), since there is
+/// nothing to send it on. Distinct from declaring nothing, which falls back to
+/// the baseline ladder.
+const NO_REASONING_EFFORTS: &[ReasoningEffort] = &[];
 
 /// Request-side prompt-cache controls supported by an OpenAI-compatible
 /// provider.
@@ -42,9 +67,12 @@ pub enum OpenAiPromptCaching {
 /// model id. A request the declared shape cannot carry is refused before
 /// dispatch rather than sent in a shape the endpoint would ignore or reject.
 ///
-/// The shapes named here are the ones banshu's target providers use; no claim
-/// is made about any other endpoint that happens to speak
-/// `POST /chat/completions`.
+/// The shapes named here are the ones banshu's target providers document; no
+/// claim is made about any other endpoint that happens to speak
+/// `POST /chat/completions`. Each variant states the exact fields it puts on
+/// the wire, including the value it sends for
+/// [`ReasoningEffort::Off`] — disabling reasoning is an explicit request,
+/// never the absence of a field.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OpenAiReasoningFormat {
@@ -52,17 +80,35 @@ pub enum OpenAiReasoningFormat {
     /// request against this provider is refused; a model that reasons on its
     /// own still streams its thinking back. The default, because an
     /// unconfigured endpoint attests nothing.
+    ///
+    /// Declared by [`Provider::moonshot`].
     #[default]
     Unsupported,
-    /// OpenAI's top-level `reasoning_effort: "<effort>"` string.
+    /// A top-level `reasoning_effort: "<effort>"` string and nothing else.
+    /// `Off` sends `reasoning_effort: "none"`, the documented disabling value
+    /// of this shape.
+    ///
+    /// Declared by [`Provider::openai`].
     ReasoningEffort,
-    /// DeepSeek's `thinking: { "type": "enabled" | "disabled" }` toggle
-    /// alongside a top-level `reasoning_effort`.
-    DeepSeekThinking,
-    /// Z.AI's `thinking: { "type": "enabled" | "disabled" }` toggle. Binary:
-    /// the endpoint carries no graded effort, so any level above `Off` reads
-    /// as "enabled".
-    ZaiThinking,
+    /// A `thinking: { "type": "enabled" | "disabled" }` toggle carrying a
+    /// top-level `reasoning_effort: "<effort>"` when enabled. `Off` sends
+    /// `thinking: { "type": "disabled" }` alone — the toggle is what disables
+    /// reasoning here, so no effort string rides along.
+    ///
+    /// Declared by [`Provider::deepseek`].
+    ThinkingToggle,
+    /// The same toggle and *only* the toggle: no effort string rides along in
+    /// either direction, so any level above `Off` reads as
+    /// `thinking: { "type": "enabled" }` and `Off` as
+    /// `thinking: { "type": "disabled" }`.
+    ///
+    /// Declared by [`Provider::zai`] and [`Provider::xiaomi`]. Refusing
+    /// `Medium` here would make the provider unusable for a caller who simply
+    /// wants reasoning on, so the ladder collapses onto the toggle instead —
+    /// which is also why these providers declare no
+    /// [`reasoning_efforts`](OpenAiCompat::reasoning_efforts) vocabulary:
+    /// with no effort field on the wire, there is no vocabulary to name.
+    ThinkingToggleOnly,
 }
 
 impl OpenAiReasoningFormat {
@@ -107,8 +153,8 @@ impl AnthropicReasoningFormat {
     }
 }
 
-/// A provider's declared reasoning request shape, reduced to the two facts
-/// that don't depend on which protocol declared it.
+/// A provider's declared reasoning request shape, reduced to the facts that
+/// don't depend on which protocol declared it.
 ///
 /// This is the only place in the crate that matches on [`ApiKind`] to pick a
 /// reasoning format: the reasoning preflight and the model-stamping path both
@@ -120,6 +166,9 @@ pub(crate) struct DeclaredReasoning {
     pub(crate) declared: bool,
     /// Whether that field carries an explicit token budget.
     pub(crate) token_budget: bool,
+    /// The effort levels the endpoint documents, or `None` when the provider
+    /// names no vocabulary of its own.
+    pub(crate) efforts: Option<&'static [ReasoningEffort]>,
 }
 
 impl DeclaredReasoning {
@@ -131,10 +180,12 @@ impl DeclaredReasoning {
             ApiKind::OpenAiCompletions => Self {
                 declared: openai.reasoning_format.is_declared(),
                 token_budget: openai.reasoning_format.accepts_token_budget(),
+                efforts: openai.reasoning_efforts,
             },
             ApiKind::AnthropicMessages => Self {
                 declared: anthropic.reasoning_format.is_declared(),
                 token_budget: anthropic.reasoning_format.accepts_token_budget(),
+                efforts: anthropic.reasoning_efforts,
             },
         }
     }
@@ -162,6 +213,34 @@ pub struct OpenAiCompat {
     pub requires_reasoning_content_on_assistant_messages: bool,
     /// The reasoning request shape this endpoint accepts.
     pub reasoning_format: OpenAiReasoningFormat,
+    /// The effort levels this endpoint's reference documents, replacing the
+    /// [`BASELINE`](crate::ReasoningCapability::BASELINE) ladder on the models
+    /// this provider serves.
+    ///
+    /// A model metadata source says only *whether* a model reasons — never
+    /// which levels it takes — so without this the ladder would be the same
+    /// invented default everywhere, and a level the endpoint has never heard
+    /// of would sail past the reasoning preflight into a `400`. Declaring the
+    /// vocabulary narrows *and* widens: a provider documenting `max` gets it,
+    /// one documenting no `minimal` refuses it.
+    ///
+    /// Attest only what the reference actually offers. A level the endpoint
+    /// accepts but silently remaps onto another belongs *out* of the list —
+    /// including it would relocate the clamp this crate refuses to perform
+    /// onto the server, out of the caller's sight.
+    ///
+    /// Three states, and the difference between the last two matters:
+    ///
+    /// - `None` — the provider names no vocabulary, so its models keep the
+    ///   baseline ladder. Right for an endpoint whose request shape carries no
+    ///   effort field, since there a toggle answers for every level.
+    /// - `Some(&[…])` — exactly these levels are requestable.
+    /// - `Some(&[])` — no level is, so
+    ///   [`ReasoningCapability::reasons`](crate::ReasoningCapability::reasons)
+    ///   reports `false` for every model this provider serves. Right for an
+    ///   endpoint with no reasoning request field at all: those models may
+    ///   still stream thinking, but no effort can be *asked* of them.
+    pub reasoning_efforts: Option<&'static [ReasoningEffort]>,
 }
 
 /// Endpoint quirks declared by an Anthropic-compatible provider.
@@ -176,6 +255,11 @@ pub struct AnthropicCompat {
     pub send_session_affinity_headers: bool,
     /// The reasoning request shape this endpoint accepts.
     pub reasoning_format: AnthropicReasoningFormat,
+    /// The effort levels this endpoint's reference documents. See
+    /// [`OpenAiCompat::reasoning_efforts`] — the rule is the same on both
+    /// protocols. No Anthropic-compatible target names a vocabulary today:
+    /// both express effort as a token budget instead.
+    pub reasoning_efforts: Option<&'static [ReasoningEffort]>,
 }
 
 /// The in-process overlay of dynamically discovered models, layered over the
@@ -347,7 +431,8 @@ impl Provider {
         )
         .with_openai_compat(OpenAiCompat {
             requires_reasoning_content_on_assistant_messages: true,
-            reasoning_format: OpenAiReasoningFormat::DeepSeekThinking,
+            reasoning_format: OpenAiReasoningFormat::ThinkingToggle,
+            reasoning_efforts: Some(DEEPSEEK_REASONING_EFFORTS),
             ..OpenAiCompat::default()
         })
         .with_models_dev_id("deepseek")
@@ -363,7 +448,7 @@ impl Provider {
             "https://api.z.ai/api/coding/paas/v4",
             ["ZAI_API_KEY"],
         )
-        .with_openai_reasoning_format(OpenAiReasoningFormat::ZaiThinking)
+        .with_openai_reasoning_format(OpenAiReasoningFormat::ThinkingToggleOnly)
         .with_models_dev_id("zai")
     }
 
@@ -385,7 +470,9 @@ impl Provider {
     ///
     /// Reasoning: none on the request side — Moonshot's thinking models decide
     /// for themselves, and the endpoint takes no reasoning field, so asking
-    /// for a level is refused instead of silently dropped.
+    /// for a level is refused instead of silently dropped. Its models
+    /// therefore attest no level either: a thinking model whose thinking
+    /// cannot be steered is not a model you can request an effort from.
     pub fn moonshot() -> Self {
         Self::openai_compatible(
             "moonshot",
@@ -393,6 +480,10 @@ impl Provider {
             "https://api.moonshot.ai/v1",
             ["MOONSHOT_API_KEY"],
         )
+        .with_openai_compat(OpenAiCompat {
+            reasoning_efforts: Some(NO_REASONING_EFFORTS),
+            ..OpenAiCompat::default()
+        })
         .with_models_dev_id("moonshotai")
     }
 
@@ -412,7 +503,11 @@ impl Provider {
 
     /// Xiaomi MiMo — OpenAI-compatible, `XIAOMI_API_KEY`.
     ///
-    /// Reasoning: top-level `reasoning_effort`.
+    /// Reasoning: the `thinking` toggle alone. MiMo's own chat-completions
+    /// reference switches reasoning with `thinking: { "type": … }` and
+    /// documents no `reasoning_effort` field at all, so banshu sends none —
+    /// third-party gateways that re-expose MiMo behind a generic OpenAI schema
+    /// are not evidence about `api.xiaomimimo.com`.
     pub fn xiaomi() -> Self {
         Self::openai_compatible(
             "xiaomi",
@@ -420,7 +515,7 @@ impl Provider {
             "https://api.xiaomimimo.com/v1",
             ["XIAOMI_API_KEY"],
         )
-        .with_openai_reasoning_format(OpenAiReasoningFormat::ReasoningEffort)
+        .with_openai_reasoning_format(OpenAiReasoningFormat::ThinkingToggleOnly)
         .with_models_dev_id("xiaomi")
     }
 
@@ -457,11 +552,11 @@ impl Provider {
         self.anthropic_compat
     }
 
-    /// Whether the declared reasoning request shape of `api` carries an
-    /// explicit token budget, as the [`CapabilitySupport`] stamped onto the
-    /// models this provider serves.
-    fn reasoning_token_budget(&self, api: ApiKind) -> CapabilitySupport {
-        DeclaredReasoning::of(api, self.openai_compat, self.anthropic_compat).token_budget_support()
+    /// What this provider's declared reasoning request shape for `api`
+    /// attests — the effort ladder and the token-budget support — as stamped
+    /// onto the models it serves.
+    fn declared_reasoning(&self, api: ApiKind) -> DeclaredReasoning {
+        DeclaredReasoning::of(api, self.openai_compat, self.anthropic_compat)
     }
 
     /// The provider's models: caller-supplied models first, then the bundled
@@ -474,7 +569,7 @@ impl Provider {
             &self.id,
             &self.base_url,
             self.api_kind,
-            self.reasoning_token_budget(self.api_kind),
+            self.declared_reasoning(self.api_kind),
         ) {
             if !merged.iter().any(|known| known.id == model.id) {
                 merged.push(model);
@@ -511,7 +606,7 @@ impl Provider {
             &self.id,
             &self.base_url,
             self.api_kind,
-            self.reasoning_token_budget(self.api_kind),
+            self.declared_reasoning(self.api_kind),
         ) {
             Some(models) => {
                 self.overlay

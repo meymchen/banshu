@@ -5,19 +5,19 @@
 
 use serde_json::Value;
 
-use crate::types::{ApiKind, CapabilitySupport, Model, ModelCapabilities};
+use crate::provider::DeclaredReasoning;
+use crate::types::{ApiKind, Model, ModelCapabilities};
 
 /// The models.dev entries for `models_dev_id`, stamped with the owning
-/// provider's id, base URL, wire protocol, and the token-budget support its
-/// declared reasoning request shape carries. `None` if the key is missing or
-/// malformed.
+/// provider's id, base URL, wire protocol, and what its declared reasoning
+/// request shape attests. `None` if the key is missing or malformed.
 pub(crate) fn models_from_api_json(
     data: &Value,
     models_dev_id: &str,
     provider_id: &str,
     base_url: &str,
     api: ApiKind,
-    reasoning_token_budget: CapabilitySupport,
+    reasoning: DeclaredReasoning,
 ) -> Option<Vec<Model>> {
     let parsed = crate::models_dev::models_from_api_json(data, models_dev_id)?;
     Some(
@@ -32,7 +32,8 @@ pub(crate) fn models_from_api_json(
                 headers: Default::default(),
                 reasoning: crate::models_dev::reasoning_capability(
                     entry.reasoning,
-                    reasoning_token_budget,
+                    reasoning.token_budget_support(),
+                    reasoning.efforts,
                 ),
                 input: entry.input,
                 capabilities: ModelCapabilities {
