@@ -363,16 +363,6 @@ pub(crate) fn compute_cost(usage: &Usage, rates: &ModelCost) -> Cost {
     }
 }
 
-/// Parse accumulated tool-call arguments; fall back to an empty object when the
-/// fragments don't form valid JSON (e.g. an aborted stream).
-pub(crate) fn parse_arguments(raw: &str) -> serde_json::Value {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return serde_json::json!({});
-    }
-    serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::json!({}))
-}
-
 /// Parse one SSE event's `data:` payload as JSON, or build the terminal
 /// malformed-data detail/diagnostic a caller should yield as a
 /// [`ProtocolEvent::Failure`]. Shared by both protocols — each still checks
