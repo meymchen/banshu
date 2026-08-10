@@ -273,17 +273,25 @@ impl Parser {
         Some(value)
     }
 
-    /// Parse a number token. A token cut mid-way (`12e`, `1.`, `-`) parses as
-    /// far as it validly can; one with nothing valid at all reports [`Outcome::Empty`].
+    /// Parse a number token. A complete, valid token parses exactly; a token
+    /// cut by the end of input (`12e`, `1.`, `-`) snapshots as far as it
+    /// validly can, and one with nothing valid at all reports
+    /// [`Outcome::Empty`].
     fn number(&mut self) -> Outcome {
         let start = self.pos;
         while matches!(self.peek(), Some('0'..='9' | '.' | '+' | '-' | 'e' | 'E')) {
             self.pos += 1;
         }
         let mut token: String = self.chars[start..self.pos].iter().collect();
+        if let Ok(value) = serde_json::from_str::<Value>(&token) {
+            return Outcome::Done(value);
+        }
+        if !self.at_end() {
+            return Outcome::Bad;
+        }
         loop {
             if let Ok(value) = serde_json::from_str::<Value>(&token) {
-                return Outcome::Done(value);
+                return Outcome::Cut(value);
             }
             match token.pop() {
                 Some('.' | '+' | '-' | 'e' | 'E') => continue,
@@ -404,6 +412,11 @@ mod tests {
         assert_eq!(partial(r#"{"a":-"#), json!({}));
     }
 
+    #[test]
+    fn truncated_numbers_at_absolute_end_still_snapshot() {
+        assert_eq!(partial(r#"{"a":[1,2."#), json!({"a": [1, 2]}));
+    }
+
     // -- Repairable JSON: valid after escaping-level fixes. --
 
     #[test]
@@ -442,6 +455,12 @@ mod tests {
         invalid(r#"{"a" 1}"#);
         invalid("[1,,2]");
         invalid(r#"{"a":"bad\uZZZZ"}"#);
+    }
+
+    #[test]
+    fn mid_stream_broken_numbers_are_invalid() {
+        invalid(r#"{"a":12e}"#);
+        invalid(r#"{"a":-}"#);
     }
 
     // -- The streaming progression: snapshots after every delta. --

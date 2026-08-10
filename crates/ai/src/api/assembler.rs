@@ -41,7 +41,6 @@ pub(crate) fn is_terminal(event: &AssistantMessageEvent) -> bool {
 pub(crate) struct MessageAssembler {
     message: AssistantMessage,
     blocks: HashMap<u64, BlockState>,
-    tool_raw: HashMap<u64, String>,
     stopped: bool,
 }
 
@@ -51,7 +50,6 @@ impl MessageAssembler {
         Self {
             message,
             blocks: HashMap::new(),
-            tool_raw: HashMap::new(),
             stopped: false,
         }
     }
@@ -229,7 +227,6 @@ impl MessageAssembler {
                                 arguments: serde_json::json!({}),
                                 raw_arguments: None,
                             }));
-                        self.tool_raw.insert(block_id, String::new());
                         Some(AssistantMessageEvent::ToolCallStart {
                             content_index,
                             id,
@@ -242,12 +239,13 @@ impl MessageAssembler {
             ProtocolEvent::ToolCallDelta { block_id, delta } => {
                 match self.find_block(block_id, BlockKind::ToolCall, "delta") {
                     Ok(content_index) => {
-                        let raw = self.tool_raw.entry(block_id).or_default();
-                        raw.push_str(&delta);
                         if let AssistantContent::ToolCall(tool_call) =
                             &mut self.message.content[content_index]
                         {
-                            tool_call.raw_arguments = Some(raw.clone());
+                            tool_call
+                                .raw_arguments
+                                .get_or_insert_default()
+                                .push_str(&delta);
                             tool_call.refresh_arguments_snapshot();
                         }
                         Some(AssistantMessageEvent::ToolCallDelta {
@@ -261,19 +259,21 @@ impl MessageAssembler {
             ProtocolEvent::ToolCallEnd { block_id } => {
                 match self.find_block(block_id, BlockKind::ToolCall, "end") {
                     Ok(content_index) => {
-                        let raw = self.tool_raw.remove(&block_id).unwrap_or_default();
-                        let arguments = match partial_json::parse(&raw) {
+                        let parse_result = match &self.message.content[content_index] {
+                            AssistantContent::ToolCall(tool_call) => partial_json::parse(
+                                tool_call.raw_arguments.as_deref().unwrap_or_default(),
+                            ),
+                            _ => unreachable!("content_index was assigned to a ToolCall block"),
+                        };
+                        let arguments = match parse_result {
                             PartialArguments::Complete(arguments)
                             | PartialArguments::Partial(arguments) => arguments,
                             PartialArguments::Invalid => {
                                 // The arguments are unrecoverable: keep the raw
                                 // text on the in-progress call and fail the
                                 // stream instead of fabricating an empty object.
-                                let name = match &mut self.message.content[content_index] {
-                                    AssistantContent::ToolCall(tool_call) => {
-                                        tool_call.raw_arguments = Some(raw);
-                                        tool_call.name.clone()
-                                    }
+                                let name = match &self.message.content[content_index] {
+                                    AssistantContent::ToolCall(tool_call) => tool_call.name.clone(),
                                     _ => unreachable!(
                                         "content_index was assigned to a ToolCall block"
                                     ),
@@ -288,7 +288,6 @@ impl MessageAssembler {
                             &mut self.message.content[content_index]
                         {
                             tool_call.arguments = arguments;
-                            tool_call.raw_arguments = Some(raw);
                         }
                         self.end_block(block_id);
                         let tool_call = match &self.message.content[content_index] {
