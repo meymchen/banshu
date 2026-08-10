@@ -212,17 +212,49 @@ impl ProtocolAdapter for OpenAiCompletions {
                         if tools.len() <= slot {
                             tools.resize_with(slot + 1, ToolAccum::default);
                         }
-                        let accum = &mut tools[slot];
-                        if let Some(id) = delta.id {
-                            accum.id = id;
+                        let mut start = None;
+                        let mut arguments = None;
+                        {
+                            let accum = &mut tools[slot];
+                            if let Some(id) = delta.id {
+                                accum.id = id;
+                            }
+                            if let Some(function) = delta.function {
+                                if let Some(name) = function.name {
+                                    accum.name = name;
+                                }
+                                if let Some(fragment) = function.arguments
+                                    && !fragment.is_empty()
+                                {
+                                    arguments = Some(fragment);
+                                }
+                            }
+                            // Start the block as soon as anything is known
+                            // about it, so the id/name reach the caller before
+                            // the first argument delta.
+                            if accum.block_id.is_none()
+                                && (!accum.id.is_empty()
+                                    || !accum.name.is_empty()
+                                    || arguments.is_some())
+                            {
+                                let block_id = next_block_id;
+                                next_block_id += 1;
+                                accum.block_id = Some(block_id);
+                                start = Some(ProtocolEvent::ToolCallStart {
+                                    block_id,
+                                    id: accum.id.clone(),
+                                    name: accum.name.clone(),
+                                });
+                            }
                         }
-                        if let Some(function) = delta.function {
-                            if let Some(name) = function.name {
-                                accum.name = name;
-                            }
-                            if let Some(arguments) = function.arguments {
-                                accum.arguments.push_str(&arguments);
-                            }
+                        if let Some(event) = start {
+                            yield event;
+                        }
+                        if let Some(fragment) = arguments {
+                            let block_id = tools[slot]
+                                .block_id
+                                .expect("a slot with argument fragments has started");
+                            yield ProtocolEvent::ToolCallDelta { block_id, delta: fragment };
                         }
                     }
                     if let Some(reason) = choice.finish_reason {
@@ -242,9 +274,8 @@ impl ProtocolAdapter for OpenAiCompletions {
             }
 
             // Close whatever blocks the wire left open, then report usage and
-            // the formal stop. v0.3 collapses a tool call's fragments into one
-            // Start+Delta+End each, emitted at completion rather than per wire
-            // delta.
+            // the formal stop. Tool calls stream per wire delta, so only their
+            // ends remain.
             if let Some(block_id) = thinking_block_id {
                 yield ProtocolEvent::ThinkingEnd { block_id };
             }
@@ -252,14 +283,9 @@ impl ProtocolAdapter for OpenAiCompletions {
                 yield ProtocolEvent::TextEnd { block_id };
             }
             for accum in tools {
-                if accum.is_empty() {
-                    continue;
+                if let Some(block_id) = accum.block_id {
+                    yield ProtocolEvent::ToolCallEnd { block_id };
                 }
-                let block_id = next_block_id;
-                next_block_id += 1;
-                yield ProtocolEvent::ToolCallStart { block_id, id: accum.id, name: accum.name };
-                yield ProtocolEvent::ToolCallDelta { block_id, delta: accum.arguments };
-                yield ProtocolEvent::ToolCallEnd { block_id };
             }
 
             usage.cost = compute_cost(&usage, &cost);
@@ -271,18 +297,16 @@ impl ProtocolAdapter for OpenAiCompletions {
     }
 }
 
-/// Accumulates a single tool call's fragments across streamed deltas.
+/// Tracks a single tool call's identity and start state across streamed
+/// deltas. Arguments are not accumulated here — each fragment is yielded as a
+/// [`ProtocolEvent::ToolCallDelta`] as it arrives.
 #[derive(Default)]
 struct ToolAccum {
     id: String,
     name: String,
-    arguments: String,
-}
-
-impl ToolAccum {
-    fn is_empty(&self) -> bool {
-        self.id.is_empty() && self.name.is_empty() && self.arguments.is_empty()
-    }
+    /// Assigned when the block's `ToolCallStart` is emitted; `None` while the
+    /// slot has only been resized into existence.
+    block_id: Option<u64>,
 }
 
 /// Map an OpenAI `finish_reason` to a banshu [`StopReason`].

@@ -9,9 +9,9 @@
 
 use std::collections::HashMap;
 
-use super::parse_arguments;
 use super::protocol_event::ProtocolEvent;
 use crate::error::ErrorKind;
+use crate::partial_json::{self, PartialArguments};
 use crate::stream::AssistantMessageEvent;
 use crate::types::{
     AssistantContent, AssistantMessage, Diagnostic, DiagnosticCode, StopReason, TextContent,
@@ -224,13 +224,17 @@ impl MessageAssembler {
                         self.message
                             .content
                             .push(AssistantContent::ToolCall(ToolCall {
-                                id,
-                                name,
+                                id: id.clone(),
+                                name: name.clone(),
                                 arguments: serde_json::json!({}),
                                 raw_arguments: None,
                             }));
                         self.tool_raw.insert(block_id, String::new());
-                        Some(AssistantMessageEvent::ToolCallStart { content_index })
+                        Some(AssistantMessageEvent::ToolCallStart {
+                            content_index,
+                            id,
+                            name,
+                        })
                     }
                     Err(detail) => Some(self.violation(detail)),
                 }
@@ -244,6 +248,7 @@ impl MessageAssembler {
                             &mut self.message.content[content_index]
                         {
                             tool_call.raw_arguments = Some(raw.clone());
+                            tool_call.refresh_arguments_snapshot();
                         }
                         Some(AssistantMessageEvent::ToolCallDelta {
                             content_index,
@@ -257,7 +262,28 @@ impl MessageAssembler {
                 match self.find_block(block_id, BlockKind::ToolCall, "end") {
                     Ok(content_index) => {
                         let raw = self.tool_raw.remove(&block_id).unwrap_or_default();
-                        let arguments = parse_arguments(&raw);
+                        let arguments = match partial_json::parse(&raw) {
+                            PartialArguments::Complete(arguments)
+                            | PartialArguments::Partial(arguments) => arguments,
+                            PartialArguments::Invalid => {
+                                // The arguments are unrecoverable: keep the raw
+                                // text on the in-progress call and fail the
+                                // stream instead of fabricating an empty object.
+                                let name = match &mut self.message.content[content_index] {
+                                    AssistantContent::ToolCall(tool_call) => {
+                                        tool_call.raw_arguments = Some(raw);
+                                        tool_call.name.clone()
+                                    }
+                                    _ => unreachable!(
+                                        "content_index was assigned to a ToolCall block"
+                                    ),
+                                };
+                                self.end_block(block_id);
+                                return Some(self.violation(format!(
+                                    "tool call `{name}` ended with unrepairable arguments JSON"
+                                )));
+                            }
+                        };
                         if let AssistantContent::ToolCall(tool_call) =
                             &mut self.message.content[content_index]
                         {
@@ -572,11 +598,21 @@ mod tests {
     #[test]
     fn tool_call_end_parses_accumulated_arguments() {
         let mut a = assembler();
-        let _ = a.apply(ProtocolEvent::ToolCallStart {
-            block_id: 1,
-            id: "call_1".into(),
-            name: "get_weather".into(),
-        });
+        let event = a
+            .apply(ProtocolEvent::ToolCallStart {
+                block_id: 1,
+                id: "call_1".into(),
+                name: "get_weather".into(),
+            })
+            .expect("start emits an event");
+        assert!(matches!(
+            event,
+            AssistantMessageEvent::ToolCallStart {
+                content_index: 0,
+                ref id,
+                ref name,
+            } if id == "call_1" && name == "get_weather"
+        ));
         let _ = a.apply(ProtocolEvent::ToolCallDelta {
             block_id: 1,
             delta: r#"{"city":"Paris"}"#.into(),
@@ -599,6 +635,62 @@ mod tests {
                 );
             }
             _ => panic!("expected a ToolCallEnd event"),
+        }
+    }
+
+    #[test]
+    fn tool_call_delta_refreshes_the_partial_arguments_snapshot() {
+        let mut a = assembler();
+        let _ = a.apply(ProtocolEvent::ToolCallStart {
+            block_id: 1,
+            id: "call_1".into(),
+            name: "get_weather".into(),
+        });
+        let _ = a.apply(ProtocolEvent::ToolCallDelta {
+            block_id: 1,
+            delta: "{\"city\":\"".into(),
+        });
+        match &a.into_message().content[0] {
+            AssistantContent::ToolCall(tool_call) => {
+                assert_eq!(tool_call.arguments, serde_json::json!({ "city": "" }));
+                assert_eq!(tool_call.raw_arguments.as_deref(), Some("{\"city\":\""));
+            }
+            _ => panic!("expected a tool call"),
+        }
+    }
+
+    #[test]
+    fn unrepairable_terminal_arguments_are_a_protocol_violation() {
+        let mut a = assembler();
+        let _ = a.apply(ProtocolEvent::ToolCallStart {
+            block_id: 1,
+            id: "call_bad".into(),
+            name: "get_weather".into(),
+        });
+        let _ = a.apply(ProtocolEvent::ToolCallDelta {
+            block_id: 1,
+            delta: r#"{"city":Paris}"#.into(),
+        });
+        let event = a
+            .apply(ProtocolEvent::ToolCallEnd { block_id: 1 })
+            .expect("unrepairable arguments are terminal");
+        assert!(is_terminal(&event));
+        match event {
+            AssistantMessageEvent::Error { error, .. } => {
+                assert_eq!(error.error_kind, Some(ErrorKind::Protocol));
+                // The raw text is preserved on the call — never replaced by a
+                // fabricated successful parse.
+                match &error.content[0] {
+                    AssistantContent::ToolCall(tool_call) => {
+                        assert_eq!(
+                            tool_call.raw_arguments.as_deref(),
+                            Some(r#"{"city":Paris}"#)
+                        );
+                    }
+                    _ => panic!("expected a tool call"),
+                }
+            }
+            _ => panic!("expected an Error event"),
         }
     }
 

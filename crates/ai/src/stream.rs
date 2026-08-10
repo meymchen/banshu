@@ -69,6 +69,10 @@ pub enum AssistantMessageEvent {
     ToolCallStart {
         /// Index of the content block.
         content_index: usize,
+        /// The provider-assigned call id, as known at block start.
+        id: String,
+        /// The tool name, as known at block start.
+        name: String,
     },
     /// A fragment of the tool call's arguments JSON.
     ToolCallDelta {
@@ -157,10 +161,10 @@ impl MessageStream {
     /// event, this is an empty placeholder; its `model`/`provider` are filled
     /// in only once the terminal `Done`/`Error` message arrives.
     ///
-    /// A tool call in progress reads back with an empty `id`/`name` and `{}`
-    /// arguments until its `ToolCallEnd` — the public `ToolCallStart` event
-    /// carries no identity, so the completed call only appears on the terminal
-    /// message and at end-of-block.
+    /// A tool call in progress already carries its `id`/`name` from
+    /// `ToolCallStart`; every `ToolCallDelta` appends to its `raw_arguments`
+    /// and refreshes `arguments` with a best-effort parse of the raw text
+    /// accumulated so far, until `ToolCallEnd` installs the final value.
     pub fn partial(&self) -> &AssistantMessage {
         &self.partial
     }
@@ -250,12 +254,12 @@ impl MessageStream {
                     *slot = AssistantContent::Thinking(content.clone());
                 }
             }
-            AssistantMessageEvent::ToolCallStart { .. } => {
+            AssistantMessageEvent::ToolCallStart { id, name, .. } => {
                 self.partial
                     .content
                     .push(AssistantContent::ToolCall(ToolCall {
-                        id: String::new(),
-                        name: String::new(),
+                        id: id.clone(),
+                        name: name.clone(),
                         arguments: serde_json::json!({}),
                         raw_arguments: None,
                     }));
@@ -271,6 +275,7 @@ impl MessageStream {
                         .raw_arguments
                         .get_or_insert_default()
                         .push_str(delta);
+                    tool_call.refresh_arguments_snapshot();
                 }
             }
             AssistantMessageEvent::ToolCallEnd {
