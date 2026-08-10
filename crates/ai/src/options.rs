@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::{ProviderHeaders, RedactedHeaders, is_sensitive_header_name};
-use crate::types::ReasoningOptions;
+use crate::types::{ReasoningOptions, ToolChoice};
 
 struct RedactedMetadata<'a>(&'a BTreeMap<String, serde_json::Value>);
 
@@ -97,6 +97,19 @@ pub struct StreamOptions {
     /// Note that [`ReasoningOptions::effort`] `Off` is not the same as `None`:
     /// `Off` asks the provider to actively disable reasoning.
     pub reasoning: Option<ReasoningOptions>,
+    /// Which tool the model may or must call.
+    ///
+    /// `None` — the default — is *no override*: the request carries no
+    /// `tool_choice` field and the provider's own default applies.
+    /// `Some(..)` is an explicit request, checked before dispatch against the
+    /// choices the provider declares
+    /// ([`OpenAiCompat::tool_choice`](crate::OpenAiCompat::tool_choice) /
+    /// [`AnthropicCompat::tool_choice`](crate::AnthropicCompat::tool_choice)).
+    /// A choice it cannot express terminates in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request — it is never silently remapped onto a choice the
+    /// caller did not ask for.
+    pub tool_choice: Option<ToolChoice>,
     /// Stable conversation identifier used by providers that support
     /// cache-routing keys or session-affinity headers.
     pub session_id: Option<String>,
@@ -132,6 +145,7 @@ impl std::fmt::Debug for StreamOptions {
             .field("max_retries", &self.max_retries)
             .field("cache_retention", &self.cache_retention)
             .field("reasoning", &self.reasoning)
+            .field("tool_choice", &self.tool_choice)
             .field("session_id", &self.session_id)
             .field("headers", &RedactedHeaders(&self.headers))
             .field("metadata", &RedactedMetadata(&self.metadata))

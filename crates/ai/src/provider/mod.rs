@@ -18,7 +18,7 @@ use crate::auth::{Auth, AuthResolver, ProviderHeaders};
 use crate::discovery::{RefreshEntry, RefreshOutcome};
 use crate::options::StreamOptions;
 use crate::stream::MessageStream;
-use crate::types::{ApiKind, CapabilitySupport, Context, Model, ReasoningEffort};
+use crate::types::{ApiKind, CapabilitySupport, Context, Model, ReasoningEffort, ToolChoice};
 
 /// The effort levels DeepSeek's chat-completions reference documents for
 /// `reasoning_effort`: `low`, `high`, and `max`, plus
@@ -224,6 +224,72 @@ impl DeclaredReasoning {
     }
 }
 
+/// The tool choices an endpoint accepts in a request.
+///
+/// Every provider states its own — nothing is inferred from a base URL or a
+/// model id, and the default declares nothing: an unconfigured endpoint
+/// attests nothing, so any explicit [`ToolChoice`] is refused before dispatch
+/// rather than sent to an endpoint that might ignore or reject it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolChoiceSupport {
+    /// The provider default, made explicit: the model decides whether and
+    /// which tool to call.
+    pub auto: bool,
+    /// Forbid tool calls even though tools are offered.
+    pub none: bool,
+    /// Require at least one tool call, any tool.
+    pub required: bool,
+    /// Require one specific tool, named exactly.
+    pub named: bool,
+}
+
+impl ToolChoiceSupport {
+    /// No tool choice is expressible — the default.
+    pub const NONE: Self = Self {
+        auto: false,
+        none: false,
+        required: false,
+        named: false,
+    };
+
+    /// Every tool choice is expressible.
+    pub const ALL: Self = Self {
+        auto: true,
+        none: true,
+        required: true,
+        named: true,
+    };
+
+    /// Whether `choice` can be expressed by the endpoint this was declared for.
+    pub fn supports(&self, choice: &ToolChoice) -> bool {
+        match choice {
+            ToolChoice::Auto => self.auto,
+            ToolChoice::None => self.none,
+            ToolChoice::Required => self.required,
+            ToolChoice::Named(_) => self.named,
+        }
+    }
+
+    /// The names of the declared choices, for the rejection detail — the
+    /// caller learns what would have worked, not just what did not.
+    pub(crate) fn supported_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.auto {
+            names.push("auto");
+        }
+        if self.none {
+            names.push("none");
+        }
+        if self.required {
+            names.push("required");
+        }
+        if self.named {
+            names.push("named");
+        }
+        names
+    }
+}
+
 /// Endpoint quirks declared by an OpenAI-compatible provider.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OpenAiCompat {
@@ -235,6 +301,18 @@ pub struct OpenAiCompat {
     pub requires_reasoning_content_on_assistant_messages: bool,
     /// The reasoning request shape this endpoint accepts.
     pub reasoning_format: OpenAiReasoningFormat,
+    /// The tool choices this endpoint accepts in a request.
+    ///
+    /// OpenAI's own reference documents all four (`auto`, `none`, `required`,
+    /// and a named tool); many compatible endpoints take only the string
+    /// forms, or no `tool_choice` field at all. Declare only what the
+    /// endpoint's reference offers — a choice it cannot express is refused
+    /// before dispatch, never remapped onto one the caller did not ask for.
+    pub tool_choice: ToolChoiceSupport,
+    /// The endpoint accepts `strict: true` on function definitions
+    /// (schema-constrained tool arguments). Only then does a
+    /// [`strict`](crate::Tool::strict) marker reach the wire.
+    pub strict_tool_schemas: bool,
     /// The effort levels this endpoint's reference documents, replacing the
     /// [`BASELINE`](crate::ReasoningCapability::BASELINE) ladder on the models
     /// this provider serves.
@@ -277,6 +355,14 @@ pub struct AnthropicCompat {
     pub send_session_affinity_headers: bool,
     /// The reasoning request shape this endpoint accepts.
     pub reasoning_format: AnthropicReasoningFormat,
+    /// The tool choices this endpoint accepts in a request. See
+    /// [`OpenAiCompat::tool_choice`] — the rule is the same on both
+    /// protocols; only the wire spelling differs.
+    pub tool_choice: ToolChoiceSupport,
+    /// The endpoint accepts `strict: true` on tool definitions
+    /// (schema-constrained tool arguments). Only then does a
+    /// [`strict`](crate::Tool::strict) marker reach the wire.
+    pub strict_tool_schemas: bool,
     /// The effort levels this endpoint's reference documents. See
     /// [`OpenAiCompat::reasoning_efforts`] — the rule is the same on both
     /// protocols. No Anthropic-compatible target names a vocabulary today:
@@ -428,7 +514,8 @@ impl Provider {
 
     /// OpenAI — Chat Completions with explicit prompt-cache routing support.
     ///
-    /// Reasoning: top-level `reasoning_effort`.
+    /// Reasoning: top-level `reasoning_effort`. Tool choice: all four choices,
+    /// plus strict tool schemas.
     pub fn openai() -> Self {
         Self::openai_compatible(
             "openai",
@@ -436,14 +523,23 @@ impl Provider {
             "https://api.openai.com/v1",
             ["OPENAI_API_KEY"],
         )
-        .with_openai_prompt_caching(OpenAiPromptCaching::OpenAi)
-        .with_openai_reasoning_format(OpenAiReasoningFormat::ReasoningEffort)
+        .with_openai_compat(OpenAiCompat {
+            prompt_caching: OpenAiPromptCaching::OpenAi,
+            reasoning_format: OpenAiReasoningFormat::ReasoningEffort,
+            tool_choice: ToolChoiceSupport::ALL,
+            strict_tool_schemas: true,
+            ..OpenAiCompat::default()
+        })
         .with_models_dev_id("openai")
     }
 
     /// DeepSeek — OpenAI-compatible, `DEEPSEEK_API_KEY`.
     ///
-    /// Reasoning: a `thinking` toggle plus `reasoning_effort`.
+    /// Reasoning: a `thinking` toggle plus `reasoning_effort`. Tool choice:
+    /// `auto` and `none` only — the chat-completions reference names no other
+    /// values, and the named/required forms are documented only for DeepSeek's
+    /// Responses API, a different surface. Strict tool schemas live behind a
+    /// beta base URL, so they are not declared here.
     pub fn deepseek() -> Self {
         Self::openai_compatible(
             "deepseek",
@@ -455,6 +551,11 @@ impl Provider {
             requires_reasoning_content_on_assistant_messages: true,
             reasoning_format: OpenAiReasoningFormat::ThinkingToggle,
             reasoning_efforts: Some(DEEPSEEK_REASONING_EFFORTS),
+            tool_choice: ToolChoiceSupport {
+                auto: true,
+                none: true,
+                ..ToolChoiceSupport::NONE
+            },
             ..OpenAiCompat::default()
         })
         .with_models_dev_id("deepseek")
@@ -462,7 +563,8 @@ impl Provider {
 
     /// Z.AI (GLM coding plan) — OpenAI-compatible, `ZAI_API_KEY`.
     ///
-    /// Reasoning: a binary `thinking` toggle, no graded effort.
+    /// Reasoning: a binary `thinking` toggle, no graded effort. Tool choice:
+    /// `auto` only — the only value its reference lists.
     pub fn zai() -> Self {
         Self::openai_compatible(
             "zai",
@@ -470,7 +572,14 @@ impl Provider {
             "https://api.z.ai/api/coding/paas/v4",
             ["ZAI_API_KEY"],
         )
-        .with_openai_reasoning_format(OpenAiReasoningFormat::ThinkingToggleOnly)
+        .with_openai_compat(OpenAiCompat {
+            reasoning_format: OpenAiReasoningFormat::ThinkingToggleOnly,
+            tool_choice: ToolChoiceSupport {
+                auto: true,
+                ..ToolChoiceSupport::NONE
+            },
+            ..OpenAiCompat::default()
+        })
         .with_models_dev_id("zai")
     }
 
@@ -486,6 +595,10 @@ impl Provider {
     /// request for [`Off`](ReasoningEffort::Off) asks for — the endpoint
     /// accepts it, and what the model then does with it is documented by
     /// MiniMax, not decided here.
+    ///
+    /// Tool choice: the reference declares `tool_choice` fully supported, so
+    /// all four choices are declared; strict tool schemas appear nowhere in
+    /// it, so they are not.
     pub fn minimax() -> Self {
         Self::anthropic_compatible(
             "minimax",
@@ -493,7 +606,11 @@ impl Provider {
             "https://api.minimax.io/anthropic",
             ["MINIMAX_API_KEY"],
         )
-        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingAdaptive)
+        .with_anthropic_compat(AnthropicCompat {
+            reasoning_format: AnthropicReasoningFormat::ThinkingAdaptive,
+            tool_choice: ToolChoiceSupport::ALL,
+            ..AnthropicCompat::default()
+        })
         .with_models_dev_id("minimax")
     }
 
@@ -504,6 +621,9 @@ impl Provider {
     /// for a level is refused instead of silently dropped. Its models
     /// therefore attest no level either: a thinking model whose thinking
     /// cannot be steered is not a model you can request an effort from.
+    ///
+    /// Tool choice: all four choices and strict tool schemas, as its chat
+    /// reference documents.
     pub fn moonshot() -> Self {
         Self::openai_compatible(
             "moonshot",
@@ -513,6 +633,8 @@ impl Provider {
         )
         .with_openai_compat(OpenAiCompat {
             reasoning_efforts: Some(NO_REASONING_EFFORTS),
+            tool_choice: ToolChoiceSupport::ALL,
+            strict_tool_schemas: true,
             ..OpenAiCompat::default()
         })
         .with_models_dev_id("moonshotai")
@@ -526,6 +648,10 @@ impl Provider {
     /// model accepts is a top-level field of Kimi's *OpenAI-compatible*
     /// platform API, not of the coding endpoint's Anthropic shape, so no effort
     /// rides along here.
+    ///
+    /// Tool choice: none declared — Kimi publishes no parameter-level
+    /// reference for the coding endpoint's Anthropic shape, so an explicit
+    /// choice is refused rather than sent on a guess.
     pub fn kimi() -> Self {
         Self::anthropic_compatible(
             "kimi",
@@ -544,6 +670,10 @@ impl Provider {
     /// documents no `reasoning_effort` field at all, so banshu sends none —
     /// third-party gateways that re-expose MiMo behind a generic OpenAI schema
     /// are not evidence about `api.xiaomimimo.com`.
+    ///
+    /// Tool choice: `auto` only — its reference states any other value is
+    /// stripped server-side, which is a silent remap banshu refuses to send.
+    /// Strict tool schemas are documented, so they are declared.
     pub fn xiaomi() -> Self {
         Self::openai_compatible(
             "xiaomi",
@@ -551,7 +681,15 @@ impl Provider {
             "https://api.xiaomimimo.com/v1",
             ["XIAOMI_API_KEY"],
         )
-        .with_openai_reasoning_format(OpenAiReasoningFormat::ThinkingToggleOnly)
+        .with_openai_compat(OpenAiCompat {
+            reasoning_format: OpenAiReasoningFormat::ThinkingToggleOnly,
+            tool_choice: ToolChoiceSupport {
+                auto: true,
+                ..ToolChoiceSupport::NONE
+            },
+            strict_tool_schemas: true,
+            ..OpenAiCompat::default()
+        })
         .with_models_dev_id("xiaomi")
     }
 

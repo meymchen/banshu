@@ -19,8 +19,8 @@ use crate::http;
 use crate::provider::{AnthropicCompat, AnthropicReasoningFormat};
 use crate::types::{
     ApiKind, AssistantContent, CapabilitySupport, Context, Message, Model, ReasoningEffort,
-    ReasoningOptions, StopReason, ThinkingContent, ToolResultMessage, Usage, UserContent,
-    UserMessage,
+    ReasoningOptions, StopReason, ThinkingContent, ToolChoice, ToolResultMessage, Usage,
+    UserContent, UserMessage,
 };
 
 /// The Anthropic Messages wire protocol.
@@ -641,6 +641,7 @@ fn build_request_body(
             name: tool.name.clone(),
             description: tool.description.clone(),
             input_schema: tool.parameters.clone(),
+            strict: (tool.strict && compat.strict_tool_schemas).then_some(true),
             cache_control: cache_control.clone().filter(|_| index + 1 == tool_count),
         })
         .collect();
@@ -658,7 +659,26 @@ fn build_request_body(
             options.reasoning.as_ref(),
             max_tokens,
         ),
+        tool_choice: tool_choice_wire(options.tool_choice.as_ref()),
     }
+}
+
+/// Map a tool choice onto the `tool_choice` wire field, or `None` when the
+/// payload carries no choice at all.
+///
+/// The [tool-choice preflight](super::tool_choice) has already refused any
+/// choice the provider cannot express, so every choice reaching here is one
+/// the endpoint accepts — the name of a [`ToolChoice::Named`] goes out exactly
+/// as the caller gave it.
+fn tool_choice_wire(choice: Option<&ToolChoice>) -> Option<Value> {
+    let choice = choice?;
+    Some(match choice {
+        ToolChoice::Auto => serde_json::json!({ "type": "auto" }),
+        ToolChoice::None => serde_json::json!({ "type": "none" }),
+        // Anthropic spells "at least one tool, any tool" as `any`.
+        ToolChoice::Required => serde_json::json!({ "type": "any" }),
+        ToolChoice::Named(name) => serde_json::json!({ "type": "tool", "name": name }),
+    })
 }
 
 #[derive(Serialize)]
@@ -675,6 +695,8 @@ struct MessagesRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<ThinkingRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<Value>,
 }
 
 /// The `thinking` request object, the whole of banshu's Anthropic-compatible
@@ -727,6 +749,10 @@ struct WireTool {
     name: String,
     description: String,
     input_schema: serde_json::Value,
+    /// Sent only when the tool is marked strict *and* the provider declares
+    /// strict tool schemas — never `false`, which is the default anyway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    strict: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_control: Option<Value>,
 }
