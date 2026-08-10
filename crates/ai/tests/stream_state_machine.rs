@@ -125,8 +125,14 @@ async fn full_start_delta_end_sequence_with_stable_content_index() {
                 assert_eq!(*content_index, 1);
                 seen.text.2 = true;
             }
-            AssistantMessageEvent::ToolCallStart { content_index } => {
+            AssistantMessageEvent::ToolCallStart {
+                content_index,
+                id,
+                name,
+            } => {
                 assert_eq!(*content_index, 2);
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "ping");
                 seen.tool.0 = true;
             }
             AssistantMessageEvent::ToolCallDelta { content_index, .. } => {

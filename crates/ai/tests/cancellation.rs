@@ -360,7 +360,10 @@ async fn cancel_mid_tool_call_preserves_partial_arguments() {
     ));
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::ToolCallStart { content_index: 0 })
+        Some(AssistantMessageEvent::ToolCallStart {
+            content_index: 0,
+            ..
+        })
     ));
     assert!(matches!(
         stream.next().await,

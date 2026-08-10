@@ -133,6 +133,17 @@ from the normalized copy, and any results answering its calls go with it, so
 no result is left pointing at a call that no longer exists. A trailing
 assistant turn is left alone — its calls may still be mid-execution.
 
+**Streaming tool call** (issue #45):
+A tool call is usable from its first public event: `ToolCallStart` carries the
+known `id`/`name`, and every arguments delta refreshes `partial()`'s
+best-effort parsed `arguments` snapshot while `raw_arguments` accumulates the
+verbatim text. The snapshot comes from the incremental parser, which returns
+complete JSON exactly as parsed, closes truncated constructs (open strings,
+containers, dangling escapes) on a best-effort basis, and judges structural
+corruption unrepairable. A call whose terminal raw text is unrepairable fails
+the stream with an in-band `ErrorKind::Protocol` error that preserves the raw
+text — it never surfaces as a fabricated `{}`.
+
 **Reasoning Effort** (`ReasoningEffort`):
 The unified ladder a request asks for — `off`, `minimal`, `low`, `medium`,
 `high`, `xhigh`, `max`. `off` is an explicit request to disable reasoning,

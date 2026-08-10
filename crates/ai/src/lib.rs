@@ -32,6 +32,7 @@ mod executor;
 mod http;
 mod models;
 mod options;
+mod partial_json;
 mod registry;
 mod sse;
 mod stream;

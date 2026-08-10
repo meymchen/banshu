@@ -62,6 +62,25 @@ pub struct ToolCall {
     pub raw_arguments: Option<String>,
 }
 
+impl ToolCall {
+    /// Refresh `arguments` with a best-effort parse of the accumulated
+    /// `raw_arguments`, so a streaming call exposes a usable snapshot after
+    /// every delta. An unrepairable intermediate state keeps the previous
+    /// snapshot — only the terminal parse judges the raw text.
+    pub(crate) fn refresh_arguments_snapshot(&mut self) {
+        let Some(raw) = self.raw_arguments.as_deref() else {
+            return;
+        };
+        match crate::partial_json::parse(raw) {
+            crate::partial_json::PartialArguments::Complete(arguments)
+            | crate::partial_json::PartialArguments::Partial(arguments) => {
+                self.arguments = arguments;
+            }
+            crate::partial_json::PartialArguments::Invalid => {}
+        }
+    }
+}
+
 /// A content block produced by the assistant.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
