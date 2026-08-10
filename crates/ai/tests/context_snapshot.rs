@@ -136,6 +136,7 @@ fn fixture_context() -> Context {
                 "properties": { "city": { "type": "string" } },
                 "required": ["city"]
             }),
+            strict: false,
         }],
     }
 }

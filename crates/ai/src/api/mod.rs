@@ -18,6 +18,7 @@ mod assembler;
 mod normalize;
 mod protocol_event;
 mod reasoning;
+mod tool_choice;
 
 use std::sync::Arc;
 
@@ -235,12 +236,18 @@ pub(crate) fn drive(
         ));
         yield AssistantMessageEvent::Start;
 
-        // The reasoning preflight reads only the options, the model's
-        // attested capability, and the provider's declared request shape, so
-        // it runs first: a request nothing can honour fails before any work
-        // is done on its behalf.
+        // The reasoning and tool-choice preflights read only the options, the
+        // model's attested capability, and the provider's declared request
+        // shape, so they run first: a request nothing can honour fails before
+        // any work is done on its behalf.
         if let Err(detail) =
             reasoning::validate(&model, &options, openai_compat, anthropic_compat)
+        {
+            yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
+            return;
+        }
+        if let Err(detail) =
+            tool_choice::validate(&model, &options, openai_compat, anthropic_compat)
         {
             yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
             return;

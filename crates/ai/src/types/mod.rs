@@ -22,7 +22,7 @@ pub use message::{
 };
 pub use model::{ApiKind, CapabilitySupport, Modality, Model, ModelCapabilities, ModelCost};
 pub use reasoning::{ReasoningCapability, ReasoningEffort, ReasoningOptions};
-pub use tool::Tool;
+pub use tool::{Tool, ToolChoice};
 pub use usage::{Cost, Usage};
 
 /// Milliseconds since the Unix epoch, used for message timestamps.

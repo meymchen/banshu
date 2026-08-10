@@ -15,6 +15,7 @@ fn weather_tool() -> Tool {
             "properties": { "city": { "type": "string" } },
             "required": ["city"],
         }),
+        strict: false,
     }
 }
 

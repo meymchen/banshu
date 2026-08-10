@@ -144,6 +144,45 @@ corruption unrepairable. A call whose terminal raw text is unrepairable fails
 the stream with an in-band `ErrorKind::Protocol` error that preserves the raw
 text — it never surfaces as a fabricated `{}`.
 
+**Tool Choice** (`ToolChoice`, issue #46):
+The cross-protocol answer to "which tool may or must the model call" — `Auto`,
+`None`, `Required`, `Named`, set per request via `StreamOptions::tool_choice`.
+Its absence sends no `tool_choice` field at all: the provider's own default
+applies, and the payload is byte-for-byte what it was before the option
+existed. OpenAI-compatible wires spell the choices `"auto"` / `"none"` /
+`"required"` / `{"type":"function","function":{"name":…}}`; Anthropic-compatible
+wires spell them `{"type":"auto"}` / `{"type":"none"}` / `{"type":"any"}` /
+`{"type":"tool","name":…}`. A `Named` name goes out exactly as given, never
+rewritten. What a provider can express is declared per endpoint
+(`OpenAiCompat::tool_choice` / `AnthropicCompat::tool_choice`, a
+`ToolChoiceSupport`), never inferred: an unconfigured endpoint attests nothing,
+so any explicit choice against it is refused. Bundled declarations: OpenAI all
+four; Moonshot all four; MiniMax all four (its reference declares `tool_choice`
+fully supported); DeepSeek `auto`/`none`; Z.AI and Xiaomi MiMo `auto` only —
+MiMo's reference states other values are stripped server-side, a silent remap
+banshu refuses to send; Kimi For Coding none, since it publishes no
+parameter-level reference for its Anthropic shape.
+_Avoid_: forced tool, tool mode
+
+**Tool-choice preflight** (issue #46):
+The check in stream dispatch, right after the Reasoning preflight, that the
+provider declares support for the requested `ToolChoice` on the model's
+protocol. A choice it cannot express terminates in-band with
+`ErrorKind::InvalidRequest` before any HTTP request, naming the choices that
+would have worked — remapping a `required` onto an `auto` would answer a
+question the caller did not ask.
+
+**Strict tool schema** (`Tool::strict`, issue #46):
+A caller's marker that a tool's schema is authored to strict-mode rules, asking
+the provider for schema-constrained tool arguments. It reaches the wire only
+when the provider declares strict tool schemas
+(`OpenAiCompat::strict_tool_schemas` /
+`AnthropicCompat::strict_tool_schemas`); otherwise the field is omitted
+entirely and the tool works unconstrained. Declared by OpenAI, Moonshot, and
+Xiaomi MiMo. The marker is skipped in serialized `Tool` JSON when `false`, so
+Context Snapshots written before it existed stay byte-identical.
+_Avoid_: constrained sampling flag
+
 **Reasoning Effort** (`ReasoningEffort`):
 The unified ladder a request asks for — `off`, `minimal`, `low`, `medium`,
 `high`, `xhigh`, `max`. `off` is an explicit request to disable reasoning,

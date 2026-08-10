@@ -17,7 +17,7 @@ use crate::http;
 use crate::provider::{OpenAiCompat, OpenAiPromptCaching, OpenAiReasoningFormat};
 use crate::types::{
     ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model,
-    ReasoningEffort, ReasoningOptions, StopReason, ThinkingContent, Usage, UserContent,
+    ReasoningEffort, ReasoningOptions, StopReason, ThinkingContent, ToolChoice, Usage, UserContent,
     UserMessage,
 };
 
@@ -621,6 +621,7 @@ fn build_request_body(
                 name: tool.name.clone(),
                 description: tool.description.clone(),
                 parameters: tool.parameters.clone(),
+                strict: (tool.strict && compat.strict_tool_schemas).then_some(true),
             },
         })
         .collect();
@@ -653,7 +654,28 @@ fn build_request_body(
             .then_some("24h"),
         thinking: reasoning.thinking,
         reasoning_effort: reasoning.effort,
+        tool_choice: tool_choice_wire(options.tool_choice.as_ref()),
     }
+}
+
+/// Map a tool choice onto the `tool_choice` wire field, or `None` when the
+/// payload carries no choice at all.
+///
+/// The [tool-choice preflight](super::tool_choice) has already refused any
+/// choice the provider cannot express, so every choice reaching here is one
+/// the endpoint accepts — the name of a [`ToolChoice::Named`] goes out exactly
+/// as the caller gave it.
+fn tool_choice_wire(choice: Option<&ToolChoice>) -> Option<serde_json::Value> {
+    let choice = choice?;
+    Some(match choice {
+        ToolChoice::Auto => serde_json::json!("auto"),
+        ToolChoice::None => serde_json::json!("none"),
+        ToolChoice::Required => serde_json::json!("required"),
+        ToolChoice::Named(name) => serde_json::json!({
+            "type": "function",
+            "function": { "name": name },
+        }),
+    })
 }
 
 #[derive(Serialize)]
@@ -676,6 +698,8 @@ struct ChatRequest {
     thinking: Option<ThinkingToggle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
 }
 
 /// The `thinking: { "type": "enabled" | "disabled" }` object DeepSeek, Xiaomi
@@ -706,6 +730,10 @@ struct WireFunction {
     name: String,
     description: String,
     parameters: serde_json::Value,
+    /// Sent only when the tool is marked strict *and* the provider declares
+    /// strict tool schemas — never `false`, which is the default anyway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    strict: Option<bool>,
 }
 
 #[derive(Serialize)]

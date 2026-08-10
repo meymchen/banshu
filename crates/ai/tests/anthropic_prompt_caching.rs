@@ -56,6 +56,7 @@ fn tool(name: &str) -> Tool {
         name: name.into(),
         description: format!("The {name} tool"),
         parameters: json!({ "type": "object", "properties": {} }),
+        strict: false,
     }
 }
 
