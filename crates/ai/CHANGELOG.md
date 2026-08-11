@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/meymchen/banshu/compare/v0.4.0...v0.5.0) - 2026-08-10
+
+### Added
+
+- *(ai)* [**breaking**] add cross-protocol tool choice ([#46](https://github.com/meymchen/banshu/pull/46)) ([#69](https://github.com/meymchen/banshu/pull/69))
+- *(ai)* [**breaking**] expose tool identity and partial arguments while streaming ([#67](https://github.com/meymchen/banshu/pull/67))
+
 ## [0.4.0](https://github.com/meymchen/banshu/compare/v0.3.0...v0.4.0) - 2026-08-04
 
 ### Added
