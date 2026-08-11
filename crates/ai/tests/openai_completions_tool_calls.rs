@@ -8,7 +8,7 @@
 
 use banshu_ai::{
     AssistantContent, AssistantMessageEvent, Context, ErrorKind, Model, Provider, StopReason,
-    StreamOptions,
+    StreamOptions, Tool,
 };
 use futures_util::StreamExt;
 use wiremock::matchers::{method, path};
@@ -89,6 +89,23 @@ async fn assembles_a_streamed_tool_call() {
     assert_eq!(
         tool_call.raw_arguments.as_deref(),
         Some(r#"{"city":"Paris"}"#)
+    );
+
+    let tool = Tool {
+        name: "get_weather".into(),
+        description: "Get weather for a city".into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "required": ["city"],
+            "properties": { "city": { "type": "string" } },
+            "additionalProperties": false
+        }),
+        strict: true,
+    };
+    assert_eq!(
+        tool.validate_arguments(&tool_call.arguments).unwrap(),
+        tool_call.arguments,
+        "terminal streamed arguments should pass directly into validation"
     );
 }
 
