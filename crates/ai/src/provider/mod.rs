@@ -951,6 +951,15 @@ impl Provider {
         }
     }
 
+    /// The OAuth session behind this provider's auth, when it has one — the
+    /// handle [`Models::login`](crate::Models::login) and friends delegate to.
+    pub fn oauth_session(&self) -> Option<crate::OAuthSession> {
+        match &self.auth {
+            Auth::OAuth(auth) => Some(auth.session().clone()),
+            _ => None,
+        }
+    }
+
     /// Best-effort synchronous key lookup from the configured environment
     /// variables. Only [`Auth::api_key_env`] resolves synchronously; keyless
     /// and custom resolvers report `None` here (availability gating and the

@@ -35,6 +35,33 @@ pub enum Error {
     #[error("authentication failed: {0}")]
     Auth(String),
 
+    /// An interactive login was cancelled through its
+    /// [`AuthInteraction`](crate::AuthInteraction) cancellation token.
+    #[error("login cancelled")]
+    AuthCancelled,
+
+    /// An interactive login exceeded its
+    /// [`AuthInteraction`](crate::AuthInteraction) timeout.
+    #[error("login timed out after {seconds}s")]
+    AuthTimeout {
+        /// The timeout that elapsed, in whole seconds.
+        seconds: u64,
+    },
+
+    /// The stored credential can no longer produce a working access token —
+    /// the refresh token was rejected, or none was ever stored — so only a
+    /// fresh login helps. The prior credential is left in the store for
+    /// diagnosis; it is never silently deleted or overwritten. Through the
+    /// stream path this surfaces in-band as a terminal
+    /// [`ErrorKind::Auth`] event whose message starts "re-login required".
+    #[error("re-login required for provider `{provider}`: {reason}")]
+    ReLoginRequired {
+        /// The provider whose credential stopped working.
+        provider: String,
+        /// Why the credential could not be refreshed.
+        reason: String,
+    },
+
     /// An underlying HTTP/transport error at request-construction time.
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),

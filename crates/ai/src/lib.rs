@@ -26,11 +26,13 @@ pub mod provider;
 
 mod auth;
 mod cancel;
+mod credentials;
 mod discovery;
 mod error;
 mod executor;
 mod http;
 mod models;
+mod oauth;
 mod options;
 mod partial_json;
 mod registry;
@@ -40,9 +42,17 @@ mod types;
 
 pub use api::{PreparedRequest, ProtocolAdapter, ProtocolEvent, ProtocolEventStream};
 pub use async_trait::async_trait;
-pub use auth::{Auth, AuthResolver, ProviderHeaders, ResolvedAuth};
+pub use auth::{Auth, AuthResolver, OAuthAuth, ProviderHeaders, ResolvedAuth};
+pub use credentials::{
+    ApiKeyCredential, Credential, CredentialStore, InMemoryCredentialStore, ModifyCredential,
+    OAuthCredential,
+};
 pub use discovery::{RefreshEntry, RefreshOutcome, RefreshReport};
 pub use error::{Error, ErrorKind, Result};
+pub use oauth::{
+    AuthInteraction, AuthInteractionHandler, DEFAULT_LOGIN_TIMEOUT, OAuthFlow, OAuthSession,
+    RefreshError, VerificationDetails,
+};
 pub use options::{CacheRetention, StreamOptions};
 pub use provider::{
     AnthropicCompat, AnthropicReasoningFormat, OpenAiCompat, OpenAiPromptCaching,
