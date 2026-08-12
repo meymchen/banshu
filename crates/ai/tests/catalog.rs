@@ -30,7 +30,9 @@ fn deepseek_catalog_loads_with_provider_metadata() {
 
 #[test]
 fn anthropic_vendor_catalog_is_tagged_anthropic() {
-    let provider = Provider::kimi();
+    let provider = Provider::kimi(std::sync::Arc::new(
+        banshu_ai::InMemoryCredentialStore::new(),
+    ));
     let models = provider.models();
 
     assert!(!models.is_empty(), "kimi catalog should not be empty");

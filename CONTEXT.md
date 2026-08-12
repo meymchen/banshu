@@ -322,11 +322,31 @@ _Avoid_: prompt callback, device UI
 The per-provider OAuth lifecycle `Models::login` / `logout` / `check_auth`
 delegate to: login is a plain `Result`-returning call, never a message
 stream. Request-time resolution refreshes an expired (or nearly expired —
-60s leeway) access token before it is used. A provider may also declare
-API-key env vars on its OAuth auth (`OAuthAuth::with_api_key_env`); a set
-variable is an explicit operator choice and always wins over the stored
-credential.
+60s leeway) access token before it is used, and authenticates the request
+with it as `Authorization: Bearer` — an OAuth access token is a bearer token
+(RFC 6750) on either wire protocol, never the protocol's API-key header
+(issue #49). A provider may also declare API-key env vars on its OAuth auth
+(`OAuthAuth::with_api_key_env`); a set variable is an explicit operator
+choice and always wins over the stored credential.
 _Avoid_: oauth client, token manager
+
+**Device Authorization** (`KimiDeviceFlow`, issue #49):
+The RFC 8628 login flow of Kimi For Coding, against the fixed Kimi auth
+contract: the fixed public client id (`KIMI_CLIENT_ID`), `POST
+/api/oauth/device_authorization` to start a login, and `POST
+/api/oauth/token` for both the device-code poll and the refresh-token grant,
+all on the configured auth host (`KIMI_AUTH_HOST`). Verification instructions
+reach the user through the Auth Interaction; polling rides out
+`authorization_pending`, stretches the interval by five seconds on
+`slow_down`, and ends on approval, `access_denied`, `expired_token`, the
+device code's own expiry, or the caller's timeout and cancellation.
+`Provider::kimi(store)` wires it to the shared credential lifecycle, so the
+store the application injects is the one login writes, refresh rotates, and
+logout deletes. The auth host is overridable only at construction
+(`with_auth_host` — HTTPS, or loopback HTTP for test servers), never through
+request metadata; and errors, Debug output, and diagnostics carry only the
+fixed OAuth error vocabulary, never token material.
+_Avoid_: device code login, kimi auth client
 
 **Single-flight refresh** (issue #48):
 Concurrent requests against one provider whose tokens expired share a single

@@ -640,7 +640,16 @@ impl Provider {
         .with_models_dev_id("moonshotai")
     }
 
-    /// Kimi For Coding — Anthropic-compatible, `KIMI_API_KEY`.
+    /// Kimi For Coding — Anthropic-compatible, OAuth via the RFC 8628 device
+    /// authorization flow, with `KIMI_API_KEY` as an operator override.
+    ///
+    /// The provider is OAuth-first: `store` is the application-injected
+    /// [`CredentialStore`](crate::CredentialStore) the login/refresh/logout
+    /// lifecycle persists tokens through ([`KimiDeviceFlow`](crate::KimiDeviceFlow)
+    /// against the fixed Kimi auth contract), and a stored access token
+    /// authenticates inference as `Authorization: Bearer`. A set
+    /// `KIMI_API_KEY` environment variable is an explicit operator choice and
+    /// wins over the stored credential.
     ///
     /// Reasoning: the bare `thinking` toggle. Kimi's reference switches
     /// thinking with `thinking: { "type": … }` and states outright that its
@@ -652,15 +661,24 @@ impl Provider {
     /// Tool choice: none declared — Kimi publishes no parameter-level
     /// reference for the coding endpoint's Anthropic shape, so an explicit
     /// choice is refused rather than sent on a guess.
-    pub fn kimi() -> Self {
-        Self::anthropic_compatible(
+    pub fn kimi(store: Arc<dyn crate::CredentialStore>) -> Self {
+        let provider = Self::anthropic_compatible(
             "kimi",
             "Kimi For Coding",
             "https://api.kimi.com/coding",
             ["KIMI_API_KEY"],
         )
         .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingToggle)
-        .with_models_dev_id("kimi-for-coding")
+        .with_models_dev_id("kimi-for-coding");
+        let session = crate::OAuthSession::new(
+            "kimi",
+            Arc::new(crate::KimiDeviceFlow::new()),
+            store,
+            provider.http.clone(),
+        );
+        provider.with_auth(Auth::OAuth(
+            crate::OAuthAuth::new(session).with_api_key_env(["KIMI_API_KEY"]),
+        ))
     }
 
     /// Xiaomi MiMo — OpenAI-compatible, `XIAOMI_API_KEY`.

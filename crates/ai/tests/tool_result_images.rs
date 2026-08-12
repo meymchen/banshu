@@ -123,12 +123,14 @@ fn openai_image_model(server: &MockServer) -> Model {
 
 /// The kimi catalog declares k3 image-capable (issue #21). Re-pointed at the mock.
 fn anthropic_image_model(server: &MockServer) -> Model {
-    let model = Provider::kimi()
-        .models()
-        .iter()
-        .find(|m| m.id == "k3")
-        .expect("k3 should be in the kimi catalog")
-        .clone();
+    let model = Provider::kimi(std::sync::Arc::new(
+        banshu_ai::InMemoryCredentialStore::new(),
+    ))
+    .models()
+    .iter()
+    .find(|m| m.id == "k3")
+    .expect("k3 should be in the kimi catalog")
+    .clone();
     assert!(
         model.input.contains(&banshu_ai::Modality::Image),
         "kimi catalog should declare k3 image-capable"
