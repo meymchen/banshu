@@ -158,4 +158,57 @@ impl Models {
     ) -> AssistantMessage {
         self.stream(model, context, options).finish().await
     }
+
+    /// Log in to a provider interactively, driving the user-facing half
+    /// through `interaction`, and store the resulting credential. This is a
+    /// plain call, not a message stream; cancellation and timeout live on the
+    /// [`AuthInteraction`](crate::AuthInteraction).
+    pub async fn login(
+        &self,
+        provider_id: &str,
+        interaction: &crate::AuthInteraction,
+    ) -> crate::Result<crate::OAuthCredential> {
+        self.oauth_session(provider_id)?.login(interaction).await
+    }
+
+    /// Delete the provider's stored credential. Logging out of a provider
+    /// that was never logged in to is not an error.
+    pub async fn logout(&self, provider_id: &str) -> crate::Result<()> {
+        self.oauth_session(provider_id)?.logout().await
+    }
+
+    /// Whether the provider holds a usable credential — a stored OAuth
+    /// credential (expired ones count; request-time refresh renews them or
+    /// fails loudly) or, for API-key providers, a resolvable key.
+    pub async fn check_auth(&self, provider_id: &str) -> crate::Result<bool> {
+        match self.provider(provider_id) {
+            Some(provider) => Ok(provider.check_available().await),
+            None => Err(crate::Error::Config(format!(
+                "no registered provider `{provider_id}`"
+            ))),
+        }
+    }
+
+    /// Refresh the provider's stored OAuth credential now, outside any
+    /// request. Concurrent callers — including in-flight requests — share the
+    /// same single-flight refresh operation.
+    pub async fn refresh_credential(
+        &self,
+        provider_id: &str,
+    ) -> crate::Result<crate::OAuthCredential> {
+        self.oauth_session(provider_id)?.refresh().await
+    }
+
+    /// The OAuth session of the named provider, or a config error when the
+    /// provider is unknown or has no OAuth login configured.
+    fn oauth_session(&self, provider_id: &str) -> crate::Result<crate::OAuthSession> {
+        let provider = self.provider(provider_id).ok_or_else(|| {
+            crate::Error::Config(format!("no registered provider `{provider_id}`"))
+        })?;
+        provider.oauth_session().ok_or_else(|| {
+            crate::Error::Config(format!(
+                "provider `{provider_id}` has no OAuth login configured"
+            ))
+        })
+    }
 }

@@ -1,10 +1,12 @@
 //! Pluggable authentication.
 //!
 //! A provider resolves credentials through an [`AuthResolver`] rather than a
-//! fixed environment variable. Three built-in adapters cover the common cases:
+//! fixed environment variable. The built-in adapters cover the common cases:
 //! [`Auth::api_key_env`] (the historical behaviour — the first set variable in
 //! a fallback list), [`Auth::keyless`] (local servers that need no credentials,
-//! e.g. llama.cpp / vLLM), and [`Auth::custom`] for anything else.
+//! e.g. llama.cpp / vLLM), [`Auth::oauth`] (a stored OAuth credential with
+//! request-time refresh, optionally behind priority env vars), and
+//! [`Auth::custom`] for anything else.
 //!
 //! Resolution runs in-band inside the stream, so a resolver failure surfaces as
 //! a terminal [`ErrorKind::Auth`](crate::ErrorKind::Auth) error event rather
@@ -144,6 +146,69 @@ pub enum Auth {
     Keyless,
     /// A caller-supplied resolver.
     Custom(Arc<dyn AuthResolver>),
+    /// An OAuth credential lifecycle; see [`OAuthAuth`].
+    OAuth(OAuthAuth),
+}
+
+/// OAuth-backed authentication: an [`OAuthSession`](crate::OAuthSession) plus
+/// an optional API-key env-var list that takes priority when set.
+///
+/// A set environment variable is an explicit operator choice and always wins
+/// over the stored OAuth credential; only with none set does resolution fall
+/// back to the credential (refreshing it at request time when expired).
+#[derive(Clone)]
+pub struct OAuthAuth {
+    session: crate::oauth::OAuthSession,
+    api_key_env: Vec<String>,
+}
+
+impl OAuthAuth {
+    /// OAuth-only authentication over `session`.
+    pub fn new(session: crate::oauth::OAuthSession) -> Self {
+        Self {
+            session,
+            api_key_env: Vec::new(),
+        }
+    }
+
+    /// Environment variables whose API key, when set, is used instead of the
+    /// OAuth credential.
+    pub fn with_api_key_env(mut self, vars: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.api_key_env = vars.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The session behind this adapter, for
+    /// [`Models::login`](crate::Models::login) and friends.
+    pub(crate) fn session(&self) -> &crate::oauth::OAuthSession {
+        &self.session
+    }
+
+    fn env_api_key(&self) -> Option<String> {
+        self.api_key_env
+            .iter()
+            .find_map(|name| std::env::var(name).ok())
+    }
+}
+
+#[async_trait]
+impl AuthResolver for OAuthAuth {
+    async fn check(&self) -> Result<bool> {
+        if self.env_api_key().is_some() {
+            return Ok(true);
+        }
+        self.session.check_auth().await
+    }
+
+    async fn resolve(&self) -> Result<ResolvedAuth> {
+        if let Some(key) = self.env_api_key() {
+            return Ok(ResolvedAuth {
+                api_key: Some(key),
+                ..Default::default()
+            });
+        }
+        self.session.resolve().await
+    }
 }
 
 impl Auth {
@@ -164,6 +229,12 @@ impl Auth {
         Self::Custom(resolver)
     }
 
+    /// OAuth-backed authentication over `session`. Add API-key env vars that
+    /// take priority with [`OAuthAuth::with_api_key_env`].
+    pub fn oauth(session: crate::oauth::OAuthSession) -> Self {
+        Self::OAuth(OAuthAuth::new(session))
+    }
+
     /// Synchronous best-effort key lookup, used by the list-models probe (which
     /// needs the key string, not just its presence). Only [`Auth::ApiKeyEnv`]
     /// can answer synchronously; keyless has no key, and custom resolvers
@@ -171,6 +242,7 @@ impl Auth {
     pub(crate) fn env_api_key(&self) -> Option<String> {
         match self {
             Self::ApiKeyEnv(vars) => vars.iter().find_map(|name| std::env::var(name).ok()),
+            Self::OAuth(auth) => auth.env_api_key(),
             _ => None,
         }
     }
@@ -186,6 +258,7 @@ impl Auth {
             Self::ApiKeyEnv(vars) => vars.iter().any(|name| std::env::var(name).is_ok()),
             Self::Keyless => true,
             Self::Custom(_) => false,
+            Self::OAuth(auth) => auth.env_api_key().is_some(),
         }
     }
 }
@@ -197,6 +270,7 @@ impl AuthResolver for Auth {
             Self::ApiKeyEnv(vars) => Ok(vars.iter().any(|name| std::env::var(name).is_ok())),
             Self::Keyless => Ok(true),
             Self::Custom(resolver) => resolver.check().await,
+            Self::OAuth(auth) => auth.check().await,
         }
     }
 
@@ -214,6 +288,7 @@ impl AuthResolver for Auth {
             },
             Self::Keyless => Ok(ResolvedAuth::default()),
             Self::Custom(resolver) => resolver.resolve().await,
+            Self::OAuth(auth) => auth.resolve().await,
         }
     }
 }
