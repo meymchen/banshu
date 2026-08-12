@@ -293,6 +293,50 @@ rejects rather than repairs — clamping to a level the caller did not ask for
 would answer a different question.
 _Avoid_: reasoning clamp, effort fallback
 
+**Credential** (`Credential`, issue #48):
+The type-tagged secret material an application persists for a provider —
+`apiKey` or `oauth` — with a hand-written redacted `Debug` so secrets never
+reach logs. The OAuth half carries the access token, an optional refresh
+token, an optional expiry (unix milliseconds; absent means "never expires"),
+and an optional `resourceUrl` that overrides the request endpoint at
+credential level (HTTPS only; loopback HTTP tolerated for local dev).
+_Avoid_: token blob, auth entry
+
+**Credential Store** (`CredentialStore`, issue #48):
+The application-injectable seam credentials live behind: read, list, delete,
+and `modify` — a serialized read-modify-write that is the only write path
+with a read, which is what makes refresh-token rotation atomic. The crate
+ships the process-local `InMemoryCredentialStore`; durable or encrypted
+storage is the application's implementation of the same trait.
+_Avoid_: token cache, keyring
+
+**Auth Interaction** (`AuthInteraction`, issue #48):
+Everything a login flow needs from the user side: verification instructions
+(URL plus optional user code), an optional browser request the application
+may decline, status reports, and the caller's timeout and cancellation token.
+Flows run their polling inside `AuthInteraction::wait`, so a stuck login ends
+as `Error::AuthTimeout` or `Error::AuthCancelled` rather than hanging.
+_Avoid_: prompt callback, device UI
+
+**OAuth Session** (`OAuthSession`, issue #48):
+The per-provider OAuth lifecycle `Models::login` / `logout` / `check_auth`
+delegate to: login is a plain `Result`-returning call, never a message
+stream. Request-time resolution refreshes an expired (or nearly expired —
+60s leeway) access token before it is used. A provider may also declare
+API-key env vars on its OAuth auth (`OAuthAuth::with_api_key_env`); a set
+variable is an explicit operator choice and always wins over the stored
+credential.
+_Avoid_: oauth client, token manager
+
+**Single-flight refresh** (issue #48):
+Concurrent requests against one provider whose tokens expired share a single
+refresh HTTP operation: every waiter joins the same shared future and
+resolves to the same structured result. A rejected refresh token
+(`RefreshError::Invalid`) never deletes or overwrites the stored credential —
+it stays for diagnosis and the caller gets `Error::ReLoginRequired`; a
+transient failure likewise preserves it and reports `Error::Auth`.
+_Avoid_: refresh dedup, token lock
+
 **Context Snapshot** (`ContextSnapshotV1`):
 The versioned JSON persistence format for a `Context`, pinned by a golden
 fixture. The serialized shape (camelCase, `role`/`type` tags) is a published
