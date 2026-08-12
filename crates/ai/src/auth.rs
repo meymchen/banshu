@@ -98,7 +98,9 @@ pub(crate) fn merge_header_layers<'a>(
 #[derive(Clone, Default)]
 pub struct ResolvedAuth {
     /// The API key to authenticate with, if the endpoint needs one. `None`
-    /// sends no auth header (a keyless endpoint).
+    /// generates no protocol-native auth header — a keyless endpoint, or a
+    /// resolver that attaches its own credentials through
+    /// [`headers`](Self::headers) (as OAuth bearer tokens do).
     pub api_key: Option<String>,
     /// Extra headers to attach to each request.
     pub headers: ProviderHeaders,

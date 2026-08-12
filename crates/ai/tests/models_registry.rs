@@ -8,7 +8,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn get_looks_up_models_by_provider_and_id() {
     let models = Models::new()
         .with_provider(Provider::deepseek())
-        .with_provider(Provider::kimi());
+        .with_provider(Provider::kimi(std::sync::Arc::new(
+            banshu_ai::InMemoryCredentialStore::new(),
+        )));
 
     let found = models
         .get("deepseek", "deepseek-chat")
@@ -31,7 +33,9 @@ async fn available_reflects_env_configured_providers() {
 
     let models = Models::new()
         .with_provider(Provider::deepseek())
-        .with_provider(Provider::kimi());
+        .with_provider(Provider::kimi(std::sync::Arc::new(
+            banshu_ai::InMemoryCredentialStore::new(),
+        )));
 
     let available = models.available().await;
     assert!(available.iter().any(|m| m.provider == "deepseek"));

@@ -31,6 +31,7 @@ mod discovery;
 mod error;
 mod executor;
 mod http;
+mod kimi;
 mod models;
 mod oauth;
 mod options;
@@ -49,6 +50,7 @@ pub use credentials::{
 };
 pub use discovery::{RefreshEntry, RefreshOutcome, RefreshReport};
 pub use error::{Error, ErrorKind, Result};
+pub use kimi::{KIMI_AUTH_HOST, KIMI_CLIENT_ID, KimiDeviceFlow};
 pub use oauth::{
     AuthInteraction, AuthInteractionHandler, DEFAULT_LOGIN_TIMEOUT, OAuthFlow, OAuthSession,
     RefreshError, VerificationDetails,

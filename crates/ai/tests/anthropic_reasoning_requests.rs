@@ -71,7 +71,9 @@ const TARGETS: [(&str, AnthropicReasoningFormat); 4] = [
 
 fn provider(id: &str, server: &MockServer) -> Provider {
     match id {
-        "kimi" => Provider::kimi(),
+        "kimi" => Provider::kimi(std::sync::Arc::new(
+            banshu_ai::InMemoryCredentialStore::new(),
+        )),
         "minimax" => Provider::minimax(),
         // Anthropic's own budget shape, which no bundled vendor declares: a
         // caller pointing `anthropic_compatible` at an endpoint that documents

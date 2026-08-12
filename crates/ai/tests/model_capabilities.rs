@@ -165,7 +165,9 @@ fn bundled_catalog_models_are_attested_tool_calling() {
     // the catalog is exactly the registry's agent pool before any refresh.
     let models = Models::new()
         .with_provider(Provider::deepseek())
-        .with_provider(Provider::kimi());
+        .with_provider(Provider::kimi(std::sync::Arc::new(
+            banshu_ai::InMemoryCredentialStore::new(),
+        )));
 
     let all = models.models();
     assert!(!all.is_empty(), "bundled catalogs should not be empty");

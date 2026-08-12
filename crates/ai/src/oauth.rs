@@ -305,9 +305,16 @@ impl OAuthSession {
         } else {
             credential
         };
+        // An OAuth access token is a bearer token (RFC 6750) on either wire
+        // protocol, so it is attached as a header directly — never through
+        // `api_key`, whose protocol-native placement (e.g. Anthropic's
+        // `x-api-key`) is for API keys, not tokens.
         Ok(ResolvedAuth {
-            api_key: Some(credential.access_token),
-            headers: Default::default(),
+            api_key: None,
+            headers: crate::auth::ProviderHeaders::from([(
+                "authorization".to_string(),
+                Some(format!("Bearer {}", credential.access_token)),
+            )]),
             base_url: credential.resource_url,
         })
     }
@@ -644,7 +651,15 @@ mod tests {
             .unwrap();
 
         let resolved = session.resolve().await.unwrap();
-        assert_eq!(resolved.api_key.as_deref(), Some("access-fresh"));
+        assert_eq!(resolved.api_key, None);
+        assert_eq!(
+            resolved
+                .headers
+                .get("authorization")
+                .and_then(Option::as_deref),
+            Some("Bearer access-fresh"),
+            "an OAuth access token authenticates as a bearer token"
+        );
         assert_eq!(
             resolved.base_url.as_deref(),
             Some("https://inference.example.com")
@@ -679,7 +694,13 @@ mod tests {
         }
         for handle in handles {
             let resolved = handle.await.unwrap().unwrap();
-            assert_eq!(resolved.api_key.as_deref(), Some("access-renewed"));
+            assert_eq!(
+                resolved
+                    .headers
+                    .get("authorization")
+                    .and_then(Option::as_deref),
+                Some("Bearer access-renewed")
+            );
         }
         assert_eq!(flow.refresh_calls.load(Ordering::SeqCst), 1);
         // The rotation landed in the store, refresh token carried over.
