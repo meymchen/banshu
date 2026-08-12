@@ -129,7 +129,9 @@ fn provider(id: &str) -> Provider {
         "moonshot" => Provider::moonshot(),
         "xiaomi" => Provider::xiaomi(),
         "minimax" => Provider::minimax(),
-        "kimi" => Provider::kimi(),
+        "kimi" => Provider::kimi(std::sync::Arc::new(
+            banshu_ai::InMemoryCredentialStore::new(),
+        )),
         other => panic!("`{other}` is not one of the six target providers"),
     }
 }
@@ -635,14 +637,21 @@ async fn a_request_without_a_reasoning_option_carries_no_reasoning_field() {
         )
         .finish()
         .await;
-    Provider::kimi()
-        .stream(
-            &reasoning_model(&Provider::kimi(), &server),
-            &Context::new().user("hi"),
-            &options(),
-        )
-        .finish()
-        .await;
+    Provider::kimi(std::sync::Arc::new(
+        banshu_ai::InMemoryCredentialStore::new(),
+    ))
+    .stream(
+        &reasoning_model(
+            &Provider::kimi(std::sync::Arc::new(
+                banshu_ai::InMemoryCredentialStore::new(),
+            )),
+            &server,
+        ),
+        &Context::new().user("hi"),
+        &options(),
+    )
+    .finish()
+    .await;
 
     let bodies = request_bodies(&server).await;
     assert_eq!(bodies.len(), 2, "both protocols were exercised");

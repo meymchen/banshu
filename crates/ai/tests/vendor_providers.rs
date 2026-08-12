@@ -44,7 +44,11 @@ fn vendor_constructors_carry_the_right_metadata() {
             api: ApiKind::OpenAiCompletions,
         },
         Expected {
-            build: Provider::kimi,
+            build: || {
+                Provider::kimi(std::sync::Arc::new(
+                    banshu_ai::InMemoryCredentialStore::new(),
+                ))
+            },
             id: "kimi",
             name: "Kimi For Coding",
             base_url: "https://api.kimi.com/coding",

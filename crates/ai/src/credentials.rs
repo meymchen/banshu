@@ -162,7 +162,7 @@ impl std::fmt::Debug for OAuthCredential {
 }
 
 /// `https://` always; `http://` only to a loopback host.
-fn is_valid_resource_url(url: &str) -> bool {
+pub(crate) fn is_valid_resource_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("https://") {
         return true;
