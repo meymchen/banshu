@@ -191,6 +191,20 @@ pub trait OAuthFlow: Send + Sync {
         http: &reqwest::Client,
         credential: &OAuthCredential,
     ) -> std::result::Result<OAuthCredential, RefreshError>;
+
+    /// The request headers a resolved access token authenticates with. The
+    /// default is `Authorization: Bearer` alone — an OAuth access token is a
+    /// bearer token (RFC 6750) on either wire protocol. A flow whose endpoint
+    /// contract requires the token on further headers (MiniMax's
+    /// Anthropic-compatible endpoint also requires `x-api-key`) overrides
+    /// this; the headers merge into the request's fixed header chain like any
+    /// resolved-auth layer.
+    fn token_headers(&self, access_token: &str) -> crate::auth::ProviderHeaders {
+        crate::auth::ProviderHeaders::from([(
+            "authorization".to_string(),
+            Some(format!("Bearer {access_token}")),
+        )])
+    }
 }
 
 /// A shared refresh in flight: every waiter clones the same future and
@@ -305,16 +319,14 @@ impl OAuthSession {
         } else {
             credential
         };
-        // An OAuth access token is a bearer token (RFC 6750) on either wire
-        // protocol, so it is attached as a header directly — never through
-        // `api_key`, whose protocol-native placement (e.g. Anthropic's
-        // `x-api-key`) is for API keys, not tokens.
+        // The flow declares which headers its endpoint authenticates with —
+        // `Authorization: Bearer` by default (RFC 6750), more where the
+        // contract requires it — attached directly, never through `api_key`,
+        // whose protocol-native placement (e.g. Anthropic's `x-api-key`) is
+        // for API keys, not tokens.
         Ok(ResolvedAuth {
             api_key: None,
-            headers: crate::auth::ProviderHeaders::from([(
-                "authorization".to_string(),
-                Some(format!("Bearer {}", credential.access_token)),
-            )]),
+            headers: self.inner.flow.token_headers(&credential.access_token),
             base_url: credential.resource_url,
         })
     }

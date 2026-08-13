@@ -30,10 +30,27 @@ fn vendor_constructors_carry_the_right_metadata() {
             api: ApiKind::OpenAiCompletions,
         },
         Expected {
-            build: Provider::minimax,
+            build: || {
+                Provider::minimax(
+                    banshu_ai::MiniMaxRegion::Global,
+                    std::sync::Arc::new(banshu_ai::InMemoryCredentialStore::new()),
+                )
+            },
             id: "minimax",
             name: "MiniMax",
             base_url: "https://api.minimax.io/anthropic",
+            api: ApiKind::AnthropicMessages,
+        },
+        Expected {
+            build: || {
+                Provider::minimax(
+                    banshu_ai::MiniMaxRegion::Cn,
+                    std::sync::Arc::new(banshu_ai::InMemoryCredentialStore::new()),
+                )
+            },
+            id: "minimax-cn",
+            name: "MiniMax CN",
+            base_url: "https://api.minimaxi.com/anthropic",
             api: ApiKind::AnthropicMessages,
         },
         Expected {
