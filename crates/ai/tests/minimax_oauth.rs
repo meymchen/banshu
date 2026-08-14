@@ -536,8 +536,9 @@ async fn login_times_out_when_the_user_never_approves() {
 #[tokio::test]
 async fn user_code_expiry_deadline_ends_polling() {
     let server = MockServer::start().await;
-    // The authorization's absolute-millisecond deadline lands two seconds out.
-    let deadline = now_ms() + 2_000;
+    // The authorization's absolute-millisecond deadline lands two seconds
+    // after the code request is answered — computed at respond time, so the
+    // assertion window below is immune to mock setup latency.
     Mock::given(method("POST"))
         .and(path("/oauth/code"))
         .respond_with(move |request: &Request| {
@@ -545,7 +546,7 @@ async fn user_code_expiry_deadline_ends_polling() {
             ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "user_code": "UC-42",
                 "verification_uri": "https://www.minimax.io/oauth/verify",
-                "expired_in": deadline,
+                "expired_in": now_ms() + 2_000,
                 "interval": 1,
                 "state": state,
             }))
@@ -573,7 +574,9 @@ async fn user_code_expiry_deadline_ends_polling() {
 
     assert!(matches!(err, Error::Auth(_)), "unexpected error: {err}");
     assert!(err.to_string().contains("expired"), "{err}");
-    assert!(start.elapsed() >= Duration::from_secs(2));
+    // Polling ran the deadline out (two seconds, less the millisecond
+    // truncation of the contract's integer-ms timestamps).
+    assert!(start.elapsed() >= Duration::from_millis(1_900));
 }
 
 #[test]
