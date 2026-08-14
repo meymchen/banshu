@@ -583,7 +583,21 @@ impl Provider {
         .with_models_dev_id("zai")
     }
 
-    /// MiniMax — Anthropic-compatible, `MINIMAX_API_KEY`.
+    /// MiniMax — Anthropic-compatible, OAuth via the frozen Coding Plan portal
+    /// contract for an explicit [`MiniMaxRegion`](crate::MiniMaxRegion), with
+    /// `MINIMAX_API_KEY` as an operator override.
+    ///
+    /// The provider is OAuth-first: `store` is the application-injected
+    /// [`CredentialStore`](crate::CredentialStore) the login/refresh/logout
+    /// lifecycle persists tokens through
+    /// ([`MiniMaxPortalFlow`](crate::MiniMaxPortalFlow) against the region's
+    /// portal), and a stored access token authenticates inference as both
+    /// `Authorization: Bearer` and `x-api-key` — the two headers the MiniMax
+    /// Anthropic-compatible endpoint requires. A set `MINIMAX_API_KEY`
+    /// environment variable is an explicit operator choice and wins over the
+    /// stored credential. The region names the hosts — CN registers as
+    /// `minimax-cn` against `api.minimaxi.com`, Global as `minimax` against
+    /// `api.minimax.io`; nothing is inferred from IP.
     ///
     /// Reasoning: the adaptive `thinking` shape. MiniMax's own
     /// Anthropic-compatible reference enables thinking with
@@ -599,11 +613,11 @@ impl Provider {
     /// Tool choice: the reference declares `tool_choice` fully supported, so
     /// all four choices are declared; strict tool schemas appear nowhere in
     /// it, so they are not.
-    pub fn minimax() -> Self {
-        Self::anthropic_compatible(
-            "minimax",
-            "MiniMax",
-            "https://api.minimax.io/anthropic",
+    pub fn minimax(region: crate::MiniMaxRegion, store: Arc<dyn crate::CredentialStore>) -> Self {
+        let provider = Self::anthropic_compatible(
+            region.provider_id(),
+            region.name(),
+            region.inference_base_url(),
             ["MINIMAX_API_KEY"],
         )
         .with_anthropic_compat(AnthropicCompat {
@@ -611,7 +625,16 @@ impl Provider {
             tool_choice: ToolChoiceSupport::ALL,
             ..AnthropicCompat::default()
         })
-        .with_models_dev_id("minimax")
+        .with_models_dev_id("minimax");
+        let session = crate::OAuthSession::new(
+            region.provider_id(),
+            Arc::new(crate::MiniMaxPortalFlow::new(region)),
+            store,
+            provider.http.clone(),
+        );
+        provider.with_auth(Auth::OAuth(
+            crate::OAuthAuth::new(session).with_api_key_env(["MINIMAX_API_KEY"]),
+        ))
     }
 
     /// Moonshot AI — OpenAI-compatible, `MOONSHOT_API_KEY`.

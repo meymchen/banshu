@@ -37,6 +37,9 @@ fn raw_catalog(provider_id: &str) -> Option<&'static str> {
         "deepseek" => include_str!("catalog/deepseek.json"),
         "zai" => include_str!("catalog/zai.json"),
         "minimax" => include_str!("catalog/minimax.json"),
+        // The CN region serves the same catalog, stamped with its own
+        // provider id and endpoint.
+        "minimax-cn" => include_str!("catalog/minimax.json"),
         "moonshot" => include_str!("catalog/moonshot.json"),
         "kimi" => include_str!("catalog/kimi.json"),
         "xiaomi" => include_str!("catalog/xiaomi.json"),

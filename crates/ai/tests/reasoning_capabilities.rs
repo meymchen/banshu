@@ -128,7 +128,10 @@ fn provider(id: &str) -> Provider {
         "zai" => Provider::zai(),
         "moonshot" => Provider::moonshot(),
         "xiaomi" => Provider::xiaomi(),
-        "minimax" => Provider::minimax(),
+        "minimax" => Provider::minimax(
+            banshu_ai::MiniMaxRegion::Global,
+            std::sync::Arc::new(banshu_ai::InMemoryCredentialStore::new()),
+        ),
         "kimi" => Provider::kimi(std::sync::Arc::new(
             banshu_ai::InMemoryCredentialStore::new(),
         )),
