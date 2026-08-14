@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/meymchen/banshu/compare/v0.6.0...v0.7.0) - 2026-08-14
+
+### Added
+
+- *(ai)* [**breaking**] add MiniMax Coding Plan OAuth ([#75](https://github.com/meymchen/banshu/pull/75))
+- *(ai)* [**breaking**] add Kimi For Coding OAuth device authorization ([#49](https://github.com/meymchen/banshu/pull/49)) ([#74](https://github.com/meymchen/banshu/pull/74))
+- *(ai)* add credential storage and OAuth lifecycle abstractions ([#48](https://github.com/meymchen/banshu/pull/48)) ([#72](https://github.com/meymchen/banshu/pull/72))
+
 ## [0.6.0](https://github.com/meymchen/banshu/compare/v0.5.0...v0.6.0) - 2026-08-11
 
 ### Added
