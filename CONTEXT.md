@@ -323,10 +323,12 @@ The per-provider OAuth lifecycle `Models::login` / `logout` / `check_auth`
 delegate to: login is a plain `Result`-returning call, never a message
 stream. Request-time resolution refreshes an expired (or nearly expired —
 60s leeway) access token before it is used, and authenticates the request
-with it as `Authorization: Bearer` — an OAuth access token is a bearer token
+with the headers the flow declares (`OAuthFlow::token_headers`):
+`Authorization: Bearer` by default — an OAuth access token is a bearer token
 (RFC 6750) on either wire protocol, never the protocol's API-key header
-(issue #49). A provider may also declare API-key env vars on its OAuth auth
-(`OAuthAuth::with_api_key_env`); a set variable is an explicit operator
+(issue #49) — unless the endpoint's own contract requires more, as MiniMax's
+does (issue #50). A provider may also declare API-key env vars on its OAuth
+auth (`OAuthAuth::with_api_key_env`); a set variable is an explicit operator
 choice and always wins over the stored credential.
 _Avoid_: oauth client, token manager
 
@@ -347,6 +349,32 @@ logout deletes. The auth host is overridable only at construction
 request metadata; and errors, Debug output, and diagnostics carry only the
 fixed OAuth error vocabulary, never token material.
 _Avoid_: device code login, kimi auth client
+
+**Portal Authorization** (`MiniMaxPortalFlow`, issue #50):
+The login flow of the MiniMax Coding Plan, against the frozen portal
+contract: an explicit region (`MiniMaxRegion::Cn` / `Global` — never inferred
+from IP) naming the portal (`api.minimaxi.com` / `api.minimax.io`) and
+Anthropic-compatible inference (`<portal>/anthropic`) hosts, the fixed public
+client id (`MINIMAX_CLIENT_ID`) and scope (`MINIMAX_OAUTH_SCOPE`), `POST
+/oauth/code` with PKCE S256 and a random state to start a login, and `POST
+/oauth/token` for both the `user_code`-grant poll and the refresh-token
+grant. The code response's state must round-trip verbatim or the login is
+rejected; its `expired_in` is an absolute-millisecond deadline, while the
+token endpoint's reads as relative seconds, absolute seconds, or absolute
+milliseconds by magnitude. Every token-endpoint status but `success` and
+`error` keeps polling, inside the Auth Interaction's timeout and
+cancellation. A MiniMax access token authenticates inference on both
+`Authorization: Bearer` and `x-api-key` — the two headers the endpoint
+requires — and a token response's `resource_url` (HTTPS only, else
+structurally rejected) overrides the inference base URL at credential level.
+`Provider::minimax(region, store)` wires it to the shared credential
+lifecycle, registering the regions as `minimax` and `minimax-cn`, both
+serving the bundled MiniMax catalog with `MINIMAX_API_KEY` as operator
+override. The portal host is overridable only at construction (`with_portal`
+— HTTPS, or loopback HTTP for test servers); errors carry only the fixed
+`status` vocabulary and HTTP statuses, never token material or response
+bodies.
+_Avoid_: minimax device flow, region detection
 
 **Single-flight refresh** (issue #48):
 Concurrent requests against one provider whose tokens expired share a single

@@ -74,7 +74,10 @@ fn provider(id: &str, server: &MockServer) -> Provider {
         "kimi" => Provider::kimi(std::sync::Arc::new(
             banshu_ai::InMemoryCredentialStore::new(),
         )),
-        "minimax" => Provider::minimax(),
+        "minimax" => Provider::minimax(
+            banshu_ai::MiniMaxRegion::Global,
+            std::sync::Arc::new(banshu_ai::InMemoryCredentialStore::new()),
+        ),
         // Anthropic's own budget shape, which no bundled vendor declares: a
         // caller pointing `anthropic_compatible` at an endpoint that documents
         // `budget_tokens` declares it themselves.
