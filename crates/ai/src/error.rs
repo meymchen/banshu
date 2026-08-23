@@ -100,6 +100,10 @@ pub enum ErrorKind {
     QuotaExhausted,
     /// Any other 4xx — the request itself is wrong. Not retryable.
     InvalidRequest,
+    /// The request exceeded the model's context window: a 400/413 whose body
+    /// carries known overflow evidence (see [`crate::is_context_overflow`]).
+    /// Not retryable — resending the same request overflows again.
+    ContextOverflow,
     /// A genuine rate limit (429). Retryable.
     RateLimited,
     /// The provider is overloaded (529). Retryable.
@@ -143,20 +147,29 @@ const QUOTA_PATTERNS: &[&str] = &[
 ];
 
 /// Classify a non-2xx response by status code, sniffing the body only to
-/// demote 402/403/429 to [`ErrorKind::QuotaExhausted`].
-pub(crate) fn classify_status(status: u16, body: &str) -> ErrorKind {
+/// demote 402/403/429 to [`ErrorKind::QuotaExhausted`] and to promote 400/413
+/// carrying known overflow evidence to [`ErrorKind::ContextOverflow`]. Every
+/// other status keeps its shape, so rate limits, overload, and server errors
+/// are never misread as overflow. Returns the matched overflow-evidence label
+/// alongside the kind, so callers can name the evidence without re-matching.
+pub(crate) fn classify_status(status: u16, body: &str) -> (ErrorKind, Option<&'static str>) {
     let quota_body = || {
         let lower = body.to_lowercase();
         QUOTA_PATTERNS.iter().any(|pattern| lower.contains(pattern))
     };
-    match status {
+    let kind = match status {
         402 => ErrorKind::QuotaExhausted,
         403 | 429 if quota_body() => ErrorKind::QuotaExhausted,
         401 | 403 => ErrorKind::Auth,
         429 => ErrorKind::RateLimited,
         529 => ErrorKind::Overloaded,
+        400 | 413 => match crate::overflow::http_evidence(status, body) {
+            Some(label) => return (ErrorKind::ContextOverflow, Some(label)),
+            None => ErrorKind::InvalidRequest,
+        },
         408 | 409 | 500..=599 => ErrorKind::ServerError,
         400..=499 => ErrorKind::InvalidRequest,
         _ => ErrorKind::Api,
-    }
+    };
+    (kind, None)
 }

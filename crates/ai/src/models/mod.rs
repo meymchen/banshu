@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::models_dev::{modality_from_str, reasoning_capability};
 use crate::provider::DeclaredReasoning;
-use crate::types::{ApiKind, CapabilitySupport, Model, ModelCapabilities, ModelCost};
+use crate::types::{ApiKind, CapabilitySupport, CostTier, Model, ModelCapabilities, ModelCost};
 
 /// One entry in a bundled `catalog/<provider>.json` file.
 #[derive(Deserialize)]
@@ -29,6 +29,8 @@ struct CatalogCost {
     output: f64,
     cache_read: f64,
     cache_write: f64,
+    #[serde(default)]
+    tiers: Vec<CostTier>,
 }
 
 /// Raw JSON for a provider's bundled catalog, or `None` if none is bundled.
@@ -90,6 +92,7 @@ pub(crate) fn catalog_models(
                 output: entry.cost.output,
                 cache_read: entry.cost.cache_read,
                 cache_write: entry.cost.cache_write,
+                tiers: entry.cost.tiers,
             },
             context_window: entry.context_window,
             max_tokens: entry.max_tokens,

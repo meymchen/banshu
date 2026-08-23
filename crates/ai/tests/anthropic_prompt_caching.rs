@@ -199,6 +199,7 @@ async fn reads_cache_usage_and_bills_one_hour_writes_at_twice_the_input_rate() {
         output: 2.0,
         cache_read: 0.1,
         cache_write: 1.25,
+        tiers: Vec::new(),
     };
 
     let message = provider(&server)

@@ -60,10 +60,21 @@ pub(crate) async fn send_once(
             let raw_body = response.text().await.unwrap_or_default();
             let body: String = raw_body.chars().take(MAX_ERROR_BODY_CHARS).collect();
             let parsed = parse_error_body(status.as_u16(), &body);
+            let (kind, overflow_evidence) = classify_status(status.as_u16(), &body);
+            let mut diagnostics: Vec<Diagnostic> = parsed.diagnostic.into_iter().collect();
+            // An overflow classification names the evidence it matched, so a
+            // caller can tell *why* the request reads as context overflow
+            // without re-matching the raw body itself.
+            if let Some(label) = overflow_evidence {
+                diagnostics.push(Diagnostic::new(
+                    DiagnosticCode::ContextOverflow,
+                    format!("matched context-overflow evidence `{label}` in HTTP {status} body"),
+                ));
+            }
             Err(SendFailure {
-                kind: classify_status(status.as_u16(), &body),
+                kind,
                 detail: parsed.summary,
-                diagnostics: parsed.diagnostic.into_iter().collect(),
+                diagnostics,
                 retry_after,
             })
         }

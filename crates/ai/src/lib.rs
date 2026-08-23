@@ -37,6 +37,7 @@ mod models;
 mod models_store;
 mod oauth;
 mod options;
+mod overflow;
 mod partial_json;
 mod registry;
 mod sse;
@@ -60,6 +61,7 @@ pub use oauth::{
     RefreshError, VerificationDetails,
 };
 pub use options::{CacheRetention, StreamOptions};
+pub use overflow::is_context_overflow;
 pub use provider::{
     AnthropicCompat, AnthropicReasoningFormat, OpenAiCompat, OpenAiPromptCaching,
     OpenAiReasoningFormat, Provider, ProviderBuilder, ToolChoiceSupport,

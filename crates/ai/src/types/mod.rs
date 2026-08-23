@@ -20,7 +20,9 @@ pub use message::{
     AssistantMessage, Diagnostic, DiagnosticCode, Message, StopReason, ToolResultMessage,
     UserMessage,
 };
-pub use model::{ApiKind, CapabilitySupport, Modality, Model, ModelCapabilities, ModelCost};
+pub use model::{
+    ApiKind, CapabilitySupport, CostTier, Modality, Model, ModelCapabilities, ModelCost,
+};
 pub use reasoning::{ReasoningCapability, ReasoningEffort, ReasoningOptions};
 pub use tool::{Tool, ToolChoice, ToolValidationError};
 pub use usage::{Cost, Usage};

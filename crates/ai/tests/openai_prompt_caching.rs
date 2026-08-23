@@ -57,6 +57,7 @@ async fn normalizes_openai_cache_read_and_write_usage_and_cost() {
         output: 2.0,
         cache_read: 0.1,
         cache_write: 1.25,
+        tiers: Vec::new(),
     };
 
     let message = provider
@@ -98,6 +99,7 @@ async fn normalizes_deepseek_hit_and_miss_usage_without_double_counting() {
         output: 1.10,
         cache_read: 0.07,
         cache_write: 0.0,
+        tiers: Vec::new(),
     };
 
     let message = provider

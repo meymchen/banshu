@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use banshu_ai::models_dev::{ModelsDevModel, models_from_api_json};
-use banshu_ai::{Modality, ModelCost};
+use banshu_ai::{CostTier, Modality, ModelCost};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -45,6 +45,8 @@ struct CatalogCost {
     output: f64,
     cache_read: f64,
     cache_write: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tiers: Vec<CostTier>,
 }
 
 impl From<ModelsDevModel> for CatalogModel {
@@ -68,6 +70,7 @@ impl From<ModelCost> for CatalogCost {
             output: cost.output,
             cache_read: cost.cache_read,
             cache_write: cost.cache_write,
+            tiers: cost.tiers,
         }
     }
 }

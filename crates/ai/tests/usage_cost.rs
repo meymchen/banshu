@@ -33,6 +33,7 @@ async fn computes_cost_from_model_rates() {
         output: 1.10,
         cache_read: 0.07,
         cache_write: 0.0,
+        tiers: Vec::new(),
     };
     let context = Context::new().user("hi");
     let options = StreamOptions {
