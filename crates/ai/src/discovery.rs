@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
@@ -60,16 +61,75 @@ pub(crate) struct ListedModel {
     pub display_name: Option<String>,
 }
 
-/// Fetch and parse a models.dev `api.json`.
-pub(crate) async fn fetch_models_dev(http: &reqwest::Client, url: &str) -> Result<Value, String> {
-    let response = http
-        .get(url)
-        .timeout(DISCOVERY_TIMEOUT)
-        .send()
+/// Validators carried by a models.dev response.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Validators {
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+/// A successful conditional Catalog Refresh.
+pub(crate) enum CatalogResponse {
+    Modified(Value, Validators),
+    NotModified(Validators),
+}
+
+fn validators(response: &reqwest::Response) -> Validators {
+    Validators {
+        etag: response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+        last_modified: response
+            .headers()
+            .get(reqwest::header::LAST_MODIFIED)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    }
+}
+
+/// Conditionally fetch and parse models.dev, respecting cancellation.
+pub(crate) async fn fetch_models_dev_with(
+    http: &reqwest::Client,
+    url: &str,
+    prior: Validators,
+    cancellation: Option<&CancellationToken>,
+) -> Result<CatalogResponse, String> {
+    let mut request = http.get(url).timeout(DISCOVERY_TIMEOUT);
+    if let Some(etag) = &prior.etag {
+        request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+    }
+    if let Some(last_modified) = &prior.last_modified {
+        request = request.header(reqwest::header::IF_MODIFIED_SINCE, last_modified);
+    }
+    let response = crate::cancel::race(cancellation, request.send())
         .await
+        .map_err(|_| "cancelled".to_string())?
         .map_err(|err| err.to_string())?;
+    let next_validators = validators(&response);
+    if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+        return Ok(CatalogResponse::NotModified(Validators {
+            etag: next_validators.etag.or(prior.etag),
+            last_modified: next_validators.last_modified.or(prior.last_modified),
+        }));
+    }
     if !response.status().is_success() {
         return Err(format!("models.dev returned HTTP {}", response.status()));
     }
-    response.json().await.map_err(|err| err.to_string())
+    let data = crate::cancel::race(cancellation, response.json())
+        .await
+        .map_err(|_| "cancelled".to_string())?
+        .map_err(|err| err.to_string())?;
+    Ok(CatalogResponse::Modified(data, next_validators))
+}
+
+/// Fetch and parse a models.dev `api.json`.
+pub(crate) async fn fetch_models_dev(http: &reqwest::Client, url: &str) -> Result<Value, String> {
+    match fetch_models_dev_with(http, url, Validators::default(), None).await? {
+        CatalogResponse::Modified(data, _) => Ok(data),
+        CatalogResponse::NotModified(_) => {
+            Err("models.dev returned HTTP 304 without validators".into())
+        }
+    }
 }

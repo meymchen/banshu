@@ -2,7 +2,15 @@
 //! against wiremock. Layered merge: bundled catalog ← models.dev refresh
 //! (override + append) ← /models probe (append-only, zero-means-unknown).
 
-use banshu_ai::{ApiKind, Modality, Models, Provider, RefreshOutcome};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use banshu_ai::{
+    ApiKind, InMemoryModelsStore, Modality, Model, Models, ModelsStore, ModelsStoreEntry, Provider,
+    RefreshOptions, RefreshOutcome,
+};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -28,6 +36,384 @@ const MODELS_DEV_JSON: &str = r#"{
     }
   }
 }"#;
+
+#[tokio::test]
+async fn offline_refresh_restores_the_stored_overlay_without_network() {
+    unsafe { std::env::remove_var("DEEPSEEK_API_KEY") };
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let store = Arc::new(InMemoryModelsStore::new());
+    let mut stored = Model::openai_completions("deepseek-stored");
+    stored.provider = "deepseek".into();
+    stored.name = "DeepSeek Stored".into();
+    stored.base_url = "https://api.deepseek.com".into();
+    stored.context_window = 64_000;
+    store
+        .set(ModelsStoreEntry {
+            provider_id: "deepseek".into(),
+            models: vec![stored],
+            probed_model_ids: Vec::new(),
+            checked_at: SystemTime::now(),
+            etag: Some("\"stored-v1\"".into()),
+            last_modified: None,
+        })
+        .await
+        .unwrap();
+
+    let models = Models::new()
+        .with_models_store(store)
+        .with_provider(Provider::deepseek());
+    models
+        .refresh_from_with(
+            &format!("{}/api.json", server.uri()),
+            &RefreshOptions {
+                allow_network: false,
+                ..RefreshOptions::default()
+            },
+        )
+        .await;
+
+    let restored = models
+        .get("deepseek", "deepseek-stored")
+        .expect("stored overlay restored");
+    assert_eq!(restored.context_window, 64_000);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn freshness_skips_network_and_force_bypasses_it() {
+    unsafe { std::env::remove_var("DEEPSEEK_API_KEY") };
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(MODELS_DEV_JSON))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let store = Arc::new(InMemoryModelsStore::new());
+    let catalog_url = format!("{}/api.json", server.uri());
+
+    Models::new()
+        .with_models_store(store.clone())
+        .with_provider(Provider::deepseek())
+        .refresh_from(&catalog_url)
+        .await;
+    let entry = store.get("deepseek").await.unwrap().unwrap();
+    assert!(
+        entry
+            .models
+            .iter()
+            .any(|model| model.id == "deepseek-vnext")
+    );
+    assert!(
+        entry
+            .models
+            .iter()
+            .any(|model| model.id == "deepseek-reasoner")
+    );
+
+    let restored = Models::new()
+        .with_models_store(store)
+        .with_provider(Provider::deepseek());
+    restored
+        .refresh_from_with(
+            &catalog_url,
+            &RefreshOptions {
+                max_age: Some(Duration::from_secs(3600)),
+                ..RefreshOptions::default()
+            },
+        )
+        .await;
+    assert!(restored.get("deepseek", "deepseek-vnext").is_some());
+
+    restored
+        .refresh_from_with(
+            &catalog_url,
+            &RefreshOptions {
+                force: true,
+                max_age: Some(Duration::from_secs(3600)),
+                ..RefreshOptions::default()
+            },
+        )
+        .await;
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn validators_make_304_refresh_fresh_without_clearing_overlay() {
+    unsafe { std::env::remove_var("DEEPSEEK_API_KEY") };
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("etag", "\"catalog-v1\"")
+                .insert_header("last-modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+                .set_body_string(MODELS_DEV_JSON),
+        )
+        .mount(&server)
+        .await;
+    let store = Arc::new(InMemoryModelsStore::new());
+    let catalog_url = format!("{}/api.json", server.uri());
+    let models = Models::new()
+        .with_models_store(store.clone())
+        .with_provider(Provider::deepseek());
+    models.refresh_from(&catalog_url).await;
+    let first_checked_at = store.get("deepseek").await.unwrap().unwrap().checked_at;
+
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .respond_with(ResponseTemplate::new(304))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let report = models
+        .refresh_from_with(
+            &catalog_url,
+            &RefreshOptions {
+                force: true,
+                ..RefreshOptions::default()
+            },
+        )
+        .await;
+
+    assert_eq!(report.entries[0].catalog, RefreshOutcome::Refreshed);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests[0].headers.get("if-none-match").unwrap(),
+        "\"catalog-v1\""
+    );
+    assert_eq!(
+        requests[0].headers.get("if-modified-since").unwrap(),
+        "Wed, 21 Oct 2015 07:28:00 GMT"
+    );
+    assert!(models.get("deepseek", "deepseek-vnext").is_some());
+    assert!(store.get("deepseek").await.unwrap().unwrap().checked_at > first_checked_at);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn available_validators_are_sent_before_filling_a_missing_provider_entry() {
+    unsafe {
+        std::env::remove_var("CACHED_CATALOG_KEY");
+        std::env::remove_var("NEW_CATALOG_KEY");
+    };
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .and(header("if-none-match", "\"catalog-v1\""))
+        .respond_with(ResponseTemplate::new(304))
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(MODELS_DEV_JSON))
+        .with_priority(5)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let store = Arc::new(InMemoryModelsStore::new());
+    let mut cached = Model::openai_completions("cached-model");
+    cached.provider = "cached".into();
+    cached.base_url = server.uri();
+    store
+        .set(ModelsStoreEntry {
+            provider_id: "cached".into(),
+            models: vec![cached],
+            probed_model_ids: Vec::new(),
+            checked_at: SystemTime::now(),
+            etag: Some("\"catalog-v1\"".into()),
+            last_modified: None,
+        })
+        .await
+        .unwrap();
+    let models = Models::new()
+        .with_models_store(store)
+        .with_provider(
+            Provider::openai_compatible("cached", "Cached", server.uri(), ["CACHED_CATALOG_KEY"])
+                .with_models_dev_id("deepseek"),
+        )
+        .with_provider(
+            Provider::openai_compatible("new", "New", server.uri(), ["NEW_CATALOG_KEY"])
+                .with_models_dev_id("deepseek"),
+        );
+
+    models
+        .refresh_from(&format!("{}/api.json", server.uri()))
+        .await;
+
+    assert!(models.get("new", "deepseek-vnext").is_some());
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn cancelled_refresh_keeps_the_restored_overlay() {
+    unsafe { std::env::remove_var("DEEPSEEK_API_KEY") };
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(MODELS_DEV_JSON))
+        .mount(&server)
+        .await;
+    let store = Arc::new(InMemoryModelsStore::new());
+    let catalog_url = format!("{}/api.json", server.uri());
+    let models = Models::new()
+        .with_models_store(store)
+        .with_provider(Provider::deepseek());
+    models.refresh_from(&catalog_url).await;
+
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(1))
+                .set_body_string("{}"),
+        )
+        .mount(&server)
+        .await;
+    let cancellation = banshu_ai::CancellationToken::new();
+    let cancel = cancellation.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cancel.cancel();
+    });
+    models
+        .refresh_from_with(
+            &catalog_url,
+            &RefreshOptions {
+                force: true,
+                cancellation: Some(cancellation),
+                ..RefreshOptions::default()
+            },
+        )
+        .await;
+
+    assert!(models.get("deepseek", "deepseek-vnext").is_some());
+}
+
+#[tokio::test]
+async fn cancelled_probe_keeps_the_restored_overlay() {
+    unsafe { std::env::set_var("CANCEL_PROBE_KEY", "k") };
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (headers_sent, wait_for_headers) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 2048];
+        let bytes_read = socket.read(&mut request).await.unwrap();
+        assert!(bytes_read > 0, "probe request should reach the test server");
+        let body = br#"{"data":[{"id":"replacement"}]}"#;
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        socket.write_all(headers.as_bytes()).await.unwrap();
+        socket.flush().await.unwrap();
+        headers_sent.send(()).ok();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        socket.write_all(body).await.ok();
+    });
+    let store = Arc::new(InMemoryModelsStore::new());
+    let mut stored = Model::openai_completions("last-known-good");
+    stored.provider = "cancel-probe".into();
+    stored.base_url = base_url.clone();
+    store
+        .set(ModelsStoreEntry {
+            provider_id: "cancel-probe".into(),
+            models: vec![stored],
+            probed_model_ids: vec!["last-known-good".into()],
+            checked_at: SystemTime::now(),
+            etag: None,
+            last_modified: None,
+        })
+        .await
+        .unwrap();
+    let models = Models::new()
+        .with_models_store(store)
+        .with_provider(Provider::openai_compatible(
+            "cancel-probe",
+            "Cancel Probe",
+            base_url,
+            ["CANCEL_PROBE_KEY"],
+        ));
+    let cancellation = banshu_ai::CancellationToken::new();
+    let cancel = cancellation.clone();
+    tokio::spawn(async move {
+        wait_for_headers.await.unwrap();
+        cancel.cancel();
+    });
+
+    models
+        .refresh_from_with(
+            "http://127.0.0.1:1/api.json",
+            &RefreshOptions {
+                force: true,
+                cancellation: Some(cancellation),
+                ..RefreshOptions::default()
+            },
+        )
+        .await;
+
+    assert!(models.get("cancel-probe", "last-known-good").is_some());
+    assert!(models.get("cancel-probe", "replacement").is_none());
+}
+
+#[tokio::test]
+async fn probe_cannot_overwrite_catalog_refresh_metadata() {
+    unsafe { std::env::set_var("LAYERED_PROBE_KEY", "k") };
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"layered":{"models":{"shared":{"name":"Catalog Shared","reasoning":false,"modalities":{"input":["text"]},"limit":{"context":12345,"output":2048},"cost":{"input":1.0,"output":2.0,"cache_read":0.0,"cache_write":0.0}}}}}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"data":[{"id":"shared"},{"id":"probe-only"}]}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let models = Models::new().with_provider(
+        Provider::openai_compatible("layered", "Layered", server.uri(), ["LAYERED_PROBE_KEY"])
+            .with_models_dev_id("layered"),
+    );
+    models
+        .refresh_from(&format!("{}/api.json", server.uri()))
+        .await;
+
+    assert_eq!(
+        models.get("layered", "shared").unwrap().context_window,
+        12_345
+    );
+    assert_eq!(
+        models.get("layered", "probe-only").unwrap().context_window,
+        0
+    );
+}
 
 #[tokio::test]
 async fn refresh_overrides_and_appends_models_dev_entries() {

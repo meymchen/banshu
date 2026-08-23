@@ -24,9 +24,19 @@ them.
 _Avoid_: model listing, discovery call
 
 **Overlay**:
-The in-process merged result of Catalog ← Catalog Refresh ← Probe that a
-provider serves as its model list. Never persisted; lost when the process
-exits.
+The merged result of Catalog ← Catalog Refresh ← Probe that a provider serves
+as its model list. Its dynamic layers may be restored from an injected
+`ModelsStore` before optional network work. Stored Probe provenance is retained
+so a restored zero-means-unknown model still cannot overwrite Catalog or
+Catalog Refresh metadata. Failed, cancelled, and 304 refreshes preserve the
+last-known-good Overlay; a 304 only advances its checked-at time.
+
+**Refresh Policy** (`RefreshOptions`):
+The application-owned decision about whether discovery may use the network,
+how long a stored Overlay is fresh, whether to force a network check, and how
+to cancel one. `allow_network=false` is the hard offline gate; `force=true`
+bypasses freshness only when networking is allowed. HTTP validators belong to
+the stored Overlay and are sent by the next Catalog Refresh.
 
 **Zero-means-unknown**:
 The metadata convention for Probe-synthesized models: cost, context window,

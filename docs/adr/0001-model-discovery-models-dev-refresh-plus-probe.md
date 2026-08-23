@@ -1,5 +1,7 @@
 # Dynamic model discovery: models.dev refresh as backbone, vendor /models as additive probe
 
+Status: amended by issue #51 on 2026-08-23.
+
 We want providers to discover models at runtime instead of relying only on the
 bundled catalog. The obvious design — query each vendor's `/v1/models` — was
 rejected as the primary mechanism because those endpoints return bare ids with
@@ -21,9 +23,17 @@ overlay, not per-vendor listing.
   disturbs the existing overlay on failure; offline, the bundled catalog still
   works. MiniMax's guaranteed 404 is reported as endpoint-unsupported, not an
   error.
-- No TTL, no disk persistence, no force flag in the library — refresh cadence
-  and caching are application-layer policy (pi does its 4h TTL + store in the
-  coding-agent layer, not the ai package).
+- Issue #51 amends the original no-persistence decision. The PRD requires
+  offline startup and last-known-good recovery in the ai package, so
+  applications may inject a `ModelsStore` adapter and select network,
+  freshness, force, and cancellation policy through `RefreshOptions`. The
+  library owns the policy vocabulary and precedence rules; the application
+  still owns durable storage through its adapter. `force` bypasses freshness,
+  but never overrides `allow_network=false`.
+- Catalog Refresh persists and reuses ETag and Last-Modified validators. A 304
+  advances `checked_at` while retaining the restored Overlay. Failed or
+  cancelled Catalog Refresh and Probe work never replaces the corresponding
+  last-known-good layer.
 - Probe-synthesized models follow zero-means-unknown: costs and window sizes
   are `0`, never guessed, so cost accounting shows nothing rather than lies.
 - The xtask-generated bundled catalog stays as the offline baseline, and the
