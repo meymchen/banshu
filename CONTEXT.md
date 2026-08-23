@@ -89,6 +89,19 @@ be streamed against one model after another. An adapter consumes that copy and
 only translates it to its wire shape — it never re-applies a rule itself.
 _Avoid_: transform, sanitize
 
+**Stable Token Estimate** (`Context::estimate_tokens`, issue #52):
+A deterministic planning approximation of a Context's input size, not a
+provider tokenizer or billable usage. Its published policy counts prompt
+content while treating every image as a fixed placeholder.
+_Avoid_: token count, tokenizer result
+
+**Output Budget** (`StreamOptions::max_tokens`, issue #52):
+The most tokens a response may produce after known context capacity is
+considered. An omitted budget is bounded by known model limits; a caller-named
+budget is preserved exactly or refused when it cannot fit remaining context,
+and zero-valued model limits stay unknown.
+_Avoid_: completion allowance, output clamp
+
 **Reasoning downgrade** (issue #40):
 The normalization rule for provider-private reasoning state. A thinking
 block's opaque signature — and a text block's `textSignature` — replays
@@ -264,9 +277,10 @@ together, so:
 - a budget alongside `off` is refused, since a disabled request sends the
   toggle alone and would have to discard it.
 
-The final `max_tokens` is the request's, else the model's, else 4096 — the
-preflight and the wire read the same ladder, so a budget that passes the check
-is the one that ships.
+The final `max_tokens` is the resolved Output Budget; Anthropic's required wire
+field retains its 4096 fallback only when no model limit is known. The
+preflight and wire read the same value, so a reasoning budget that passes the
+check is the one that ships.
 _Avoid_: thinking tokens, budget clamp
 
 **Reasoning Effort Vocabulary**

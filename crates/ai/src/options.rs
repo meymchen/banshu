@@ -69,6 +69,16 @@ pub struct StreamOptions {
     /// Sampling temperature.
     pub temperature: Option<f32>,
     /// Maximum output tokens.
+    ///
+    /// An explicit value is never silently reduced: if it exceeds the context
+    /// window remaining after
+    /// [`Context::estimate_tokens`](crate::Context::estimate_tokens), the
+    /// request terminates in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// HTTP. When omitted, dispatch uses the lower of the model's known
+    /// maximum output and remaining context; a zero-valued model limit remains
+    /// unknown rather than becoming zero capacity. An explicit value continues
+    /// to override the model's advertised output maximum when context permits.
     pub max_tokens: Option<u32>,
     /// API key override. Takes precedence over provider env-var resolution.
     pub api_key: Option<String>,
