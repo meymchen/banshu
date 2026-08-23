@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/meymchen/banshu/compare/v0.7.0...v0.8.0) - 2026-08-23
+
+### Added
+
+- *(ai)* [**breaking**] classify context overflow and calculate tiered cost ([#53](https://github.com/meymchen/banshu/pull/53)) ([#79](https://github.com/meymchen/banshu/pull/79))
+- *(ai)* guard output budgets with context estimates ([#52](https://github.com/meymchen/banshu/pull/52)) ([#78](https://github.com/meymchen/banshu/pull/78))
+- *(ai)* persist and conditionally refresh model overlays ([#76](https://github.com/meymchen/banshu/pull/76))
+
 ### Added
 
 - *(ai)* add stable context-token estimates and guarded output budgets ([#52](https://github.com/meymchen/banshu/issues/52))
