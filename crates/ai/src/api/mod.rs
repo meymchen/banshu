@@ -16,6 +16,7 @@ pub mod openai_completions;
 
 mod assembler;
 mod normalize;
+mod output_budget;
 mod protocol_event;
 mod reasoning;
 mod tool_choice;
@@ -223,7 +224,7 @@ pub(crate) fn drive(
     let adapter = adapter.clone();
     let model = model.clone();
     let context = context.clone();
-    let options = options.clone();
+    let mut options = options.clone();
     let auth = auth.clone();
     let provider_headers = headers.clone();
     let http_client = http_client.clone();
@@ -235,6 +236,18 @@ pub(crate) fn drive(
             api_name(adapter.kind()),
         ));
         yield AssistantMessageEvent::Start;
+
+        // Resolve one shared output cap before either protocol sees the
+        // request. Explicit caps are caller intent and fail instead of being
+        // reduced; an omitted cap uses whatever model limits are actually
+        // known, leaving zero-means-unknown metadata unknown.
+        options.max_tokens = match output_budget::resolve(&model, &context, &options) {
+            Ok(max_tokens) => max_tokens,
+            Err(detail) => {
+                yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
+                return;
+            }
+        };
 
         // The reasoning and tool-choice preflights read only the options, the
         // model's attested capability, and the provider's declared request

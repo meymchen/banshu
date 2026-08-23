@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(ai)* add stable context-token estimates and guarded output budgets ([#52](https://github.com/meymchen/banshu/issues/52))
+
 ## [0.7.0](https://github.com/meymchen/banshu/compare/v0.6.0...v0.7.0) - 2026-08-14
 
 ### Added
