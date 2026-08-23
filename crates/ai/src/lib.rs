@@ -34,6 +34,7 @@ mod http;
 mod kimi;
 mod minimax;
 mod models;
+mod models_store;
 mod oauth;
 mod options;
 mod partial_json;
@@ -53,6 +54,7 @@ pub use discovery::{RefreshEntry, RefreshOutcome, RefreshReport};
 pub use error::{Error, ErrorKind, Result};
 pub use kimi::{KIMI_AUTH_HOST, KIMI_CLIENT_ID, KimiDeviceFlow};
 pub use minimax::{MINIMAX_CLIENT_ID, MINIMAX_OAUTH_SCOPE, MiniMaxPortalFlow, MiniMaxRegion};
+pub use models_store::{InMemoryModelsStore, ModelsStore, ModelsStoreEntry, RefreshOptions};
 pub use oauth::{
     AuthInteraction, AuthInteractionHandler, DEFAULT_LOGIN_TIMEOUT, OAuthFlow, OAuthSession,
     RefreshError, VerificationDetails,

@@ -3,16 +3,28 @@
 //! consumer reaches for: register providers once, then resolve and stream
 //! models by id without caring which provider owns them.
 
+use std::sync::Arc;
+
 use crate::discovery::{self, RefreshOutcome, RefreshReport};
+use crate::models_store::{InMemoryModelsStore, ModelsStore, ModelsStoreEntry, RefreshOptions};
 use crate::options::StreamOptions;
 use crate::provider::Provider;
 use crate::stream::MessageStream;
 use crate::types::{AssistantMessage, Context, Model};
 
 /// A runtime collection of [`Provider`]s, keyed by provider id.
-#[derive(Default)]
 pub struct Models {
     providers: Vec<Provider>,
+    models_store: Arc<dyn ModelsStore>,
+}
+
+impl Default for Models {
+    fn default() -> Self {
+        Self {
+            providers: Vec::new(),
+            models_store: Arc::new(InMemoryModelsStore::new()),
+        }
+    }
 }
 
 impl Models {
@@ -24,6 +36,12 @@ impl Models {
     /// Add a provider (builder style); see [`set_provider`](Self::set_provider).
     pub fn with_provider(mut self, provider: Provider) -> Self {
         self.set_provider(provider);
+        self
+    }
+
+    /// Replace the model-overlay store used by refresh operations.
+    pub fn with_models_store(mut self, store: Arc<dyn ModelsStore>) -> Self {
+        self.models_store = store;
         self
     }
 
@@ -100,26 +118,145 @@ impl Models {
         self.refresh_from(discovery::MODELS_DEV_URL).await
     }
 
+    /// [`refresh`](Self::refresh) under an explicit restore/network policy.
+    pub async fn refresh_with(&self, options: &RefreshOptions) -> RefreshReport {
+        self.refresh_from_with(discovery::MODELS_DEV_URL, options)
+            .await
+    }
+
     /// [`refresh`](Self::refresh) against a specific models.dev catalog URL.
     pub async fn refresh_from(&self, catalog_url: &str) -> RefreshReport {
+        self.refresh_from_with(catalog_url, &RefreshOptions::default())
+            .await
+    }
+
+    /// Refresh against `catalog_url` under an explicit restore/network policy.
+    pub async fn refresh_from_with(
+        &self,
+        catalog_url: &str,
+        options: &RefreshOptions,
+    ) -> RefreshReport {
+        let mut stored = Vec::with_capacity(self.providers.len());
+        for provider in &self.providers {
+            let entry = match self.models_store.get(provider.id()).await {
+                Ok(Some(entry)) => {
+                    if entry.provider_id == provider.id() {
+                        provider.restore_overlay(&entry);
+                    } else {
+                        tracing::warn!(
+                            provider = provider.id(),
+                            stored_provider = %entry.provider_id,
+                            "ignored model overlay stored under the wrong provider id"
+                        );
+                    }
+                    Some(entry)
+                }
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(provider = provider.id(), %error, "model overlay restore failed");
+                    None
+                }
+            };
+            stored.push(entry);
+        }
+        let all_fresh = options.max_age.is_some_and(|max_age| {
+            !stored.is_empty()
+                && stored.iter().all(|entry| {
+                    entry.as_ref().is_some_and(|entry| {
+                        entry.checked_at.elapsed().unwrap_or_default() <= max_age
+                    })
+                })
+        });
+        if !options.allow_network || (!options.force && all_fresh) {
+            return RefreshReport {
+                entries: self
+                    .providers
+                    .iter()
+                    .map(|provider| crate::RefreshEntry {
+                        provider: provider.id().to_string(),
+                        catalog: RefreshOutcome::Skipped,
+                        probe: RefreshOutcome::Skipped,
+                    })
+                    .collect(),
+            };
+        }
         // One models.dev fetch shared by every provider that wants it.
+        let catalog_entries: Vec<_> = self
+            .providers
+            .iter()
+            .zip(&stored)
+            .filter(|(provider, _)| provider.models_dev_id().is_some())
+            .collect();
+        let prior_validators = catalog_entries
+            .first()
+            .and_then(|(_, entry)| entry.as_ref())
+            .map(|entry| discovery::Validators {
+                etag: entry.etag.clone(),
+                last_modified: entry.last_modified.clone(),
+            })
+            .filter(|first| {
+                catalog_entries.iter().all(|(_, entry)| {
+                    entry.as_ref().is_some_and(|entry| {
+                        entry.etag == first.etag && entry.last_modified == first.last_modified
+                    })
+                })
+            })
+            .unwrap_or_default();
         let catalog = match self.providers.iter().find(|p| p.models_dev_id().is_some()) {
-            Some(provider) => {
-                Some(discovery::fetch_models_dev(provider.http_client(), catalog_url).await)
-            }
+            Some(provider) => Some(
+                discovery::fetch_models_dev_with(
+                    provider.http_client(),
+                    catalog_url,
+                    prior_validators,
+                    options.cancellation.as_ref(),
+                )
+                .await,
+            ),
             None => None,
         };
-        let entries = futures_util::future::join_all(self.providers.iter().map(|provider| {
+        let entries = futures_util::future::join_all(self.providers.iter().zip(stored.iter()).map(|(provider, prior)| {
             let catalog = &catalog;
+            let store = &self.models_store;
+            let cancellation = options.cancellation.as_ref();
             async move {
                 let outcome = match catalog {
-                    Some(Ok(data)) => provider.apply_models_dev(data),
+                    Some(Ok(discovery::CatalogResponse::Modified(data, _))) => provider.apply_models_dev(data),
+                    Some(Ok(discovery::CatalogResponse::NotModified(_))) if provider.models_dev_id().is_some() => RefreshOutcome::Refreshed,
                     Some(Err(err)) if provider.models_dev_id().is_some() => {
                         RefreshOutcome::Failed(err.clone())
                     }
                     _ => RefreshOutcome::Skipped,
                 };
-                provider.refresh_entry(outcome).await
+                let probe = provider.probe_models_with(cancellation).await;
+                let successful = matches!(outcome, RefreshOutcome::Refreshed)
+                    || matches!(probe, RefreshOutcome::Refreshed);
+                if successful {
+                    let validators = match catalog {
+                        Some(Ok(discovery::CatalogResponse::Modified(_, validators)))
+                        | Some(Ok(discovery::CatalogResponse::NotModified(validators)))
+                            if provider.models_dev_id().is_some() => validators.clone(),
+                        _ => discovery::Validators {
+                            etag: prior.as_ref().and_then(|entry| entry.etag.clone()),
+                            last_modified: prior.as_ref().and_then(|entry| entry.last_modified.clone()),
+                        },
+                    };
+                    let (models, probed_model_ids) = provider.overlay_snapshot();
+                    if let Err(error) = store.set(ModelsStoreEntry {
+                        provider_id: provider.id().to_string(),
+                        models,
+                        probed_model_ids,
+                        checked_at: std::time::SystemTime::now(),
+                        etag: validators.etag,
+                        last_modified: validators.last_modified,
+                    }).await {
+                        tracing::warn!(provider = provider.id(), %error, "model overlay persistence failed");
+                    }
+                }
+                crate::RefreshEntry {
+                    provider: provider.id().to_string(),
+                    catalog: outcome,
+                    probe,
+                }
             }
         }))
         .await;

@@ -834,11 +834,41 @@ impl Provider {
         }
     }
 
+    /// Restore the two discovery layers without changing their precedence.
+    pub(crate) fn restore_overlay(&self, entry: &crate::ModelsStoreEntry) {
+        let mut overlay = self.overlay.write().expect("model overlay lock poisoned");
+        if !overlay.refreshed.is_empty() || !overlay.probed.is_empty() {
+            return;
+        }
+        overlay.refreshed = entry
+            .models
+            .iter()
+            .filter(|model| {
+                model.provider == self.id && !entry.probed_model_ids.contains(&model.id)
+            })
+            .cloned()
+            .collect();
+        overlay.probed = entry
+            .models
+            .iter()
+            .filter(|model| model.provider == self.id && entry.probed_model_ids.contains(&model.id))
+            .cloned()
+            .collect();
+    }
+
     /// Probe this provider's list-models endpoint, replacing the probed layer
     /// of the overlay with zero-means-unknown models for the returned ids.
     /// Skipped without an API key; 404/405/501 means the endpoint doesn't
     /// exist. Only ids no catalog layer knows ever surface from this layer.
     pub(crate) async fn probe_models(&self) -> RefreshOutcome {
+        self.probe_models_with(None).await
+    }
+
+    /// Probe this provider while respecting cooperative cancellation.
+    pub(crate) async fn probe_models_with(
+        &self,
+        cancellation: Option<&tokio_util::sync::CancellationToken>,
+    ) -> RefreshOutcome {
         let Some(api_key) = self.env_api_key() else {
             return RefreshOutcome::Skipped;
         };
@@ -856,11 +886,16 @@ impl Provider {
                     crate::api::anthropic_messages::ANTHROPIC_VERSION,
                 ),
         };
-        let response = match request
-            .timeout(crate::discovery::DISCOVERY_TIMEOUT)
-            .send()
-            .await
+        let response = match crate::cancel::race(
+            cancellation,
+            request.timeout(crate::discovery::DISCOVERY_TIMEOUT).send(),
+        )
+        .await
         {
+            Err(_) => return RefreshOutcome::Failed("cancelled".into()),
+            Ok(response) => response,
+        };
+        let response = match response {
             Ok(response) => response,
             Err(err) => return RefreshOutcome::Failed(err.to_string()),
         };
@@ -900,6 +935,32 @@ impl Provider {
             .expect("model overlay lock poisoned")
             .probed = probed;
         RefreshOutcome::Refreshed
+    }
+
+    /// Snapshot the complete effective model set and retain Probe provenance.
+    pub(crate) fn overlay_snapshot(&self) -> (Vec<Model>, Vec<String>) {
+        let overlay = self.overlay.read().expect("model overlay lock poisoned");
+        let catalog = crate::models::catalog_models(
+            &self.id,
+            &self.base_url,
+            self.api_kind,
+            self.declared_reasoning(self.api_kind),
+        );
+        let mut probed_model_ids = Vec::new();
+        for model in &overlay.probed {
+            if self
+                .models
+                .iter()
+                .chain(&catalog)
+                .chain(&overlay.refreshed)
+                .any(|known| known.id == model.id)
+            {
+                continue;
+            }
+            probed_model_ids.push(model.id.clone());
+        }
+        drop(overlay);
+        (self.models(), probed_model_ids)
     }
 
     /// Refresh this provider's dynamic models without a registry: fetch
