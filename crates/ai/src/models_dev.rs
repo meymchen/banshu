@@ -13,7 +13,9 @@
 
 use serde_json::Value;
 
-use crate::types::{CapabilitySupport, Modality, ModelCost, ReasoningCapability, ReasoningEffort};
+use crate::types::{
+    CapabilitySupport, CostTier, Modality, ModelCost, ReasoningCapability, ReasoningEffort,
+};
 
 /// A models.dev model entry mapped onto banshu's metadata vocabulary. Carries
 /// no provider identity — the caller stamps `provider`/`base_url`/`api`.
@@ -126,6 +128,7 @@ fn parse_model(id: &str, entry: &Value) -> ModelsDevModel {
             output: cost["output"].as_f64().unwrap_or(0.0),
             cache_read: cost["cache_read"].as_f64().unwrap_or(0.0),
             cache_write: cost["cache_write"].as_f64().unwrap_or(0.0),
+            tiers: parse_cost_tiers(cost),
         },
         context_window: entry["limit"]["context"].as_u64().unwrap_or(0) as u32,
         max_tokens: entry["limit"]["output"].as_u64().unwrap_or(0) as u32,
@@ -140,4 +143,28 @@ fn modalities(value: &Value) -> Option<Vec<Modality>> {
             .filter_map(modality_from_str)
             .collect()
     })
+}
+
+/// Map models.dev `cost.tiers` entries onto [`CostTier`]s. Only context-type
+/// tiers with a known (non-zero) boundary are kept — a zero size is unknown
+/// metadata that must never select a tier. Rates a tier omits default to 0,
+/// matching how models.dev's own consumers treat partial tier entries.
+fn parse_cost_tiers(cost: &Value) -> Vec<CostTier> {
+    let Some(tiers) = cost["tiers"].as_array() else {
+        return Vec::new();
+    };
+    tiers
+        .iter()
+        .filter(|tier| tier["tier"]["type"].as_str() == Some("context"))
+        .filter_map(|tier| {
+            let size = tier["tier"]["size"].as_u64()?;
+            (size > 0).then(|| CostTier {
+                input_tokens_above: size as u32,
+                input: tier["input"].as_f64().unwrap_or(0.0),
+                output: tier["output"].as_f64().unwrap_or(0.0),
+                cache_read: tier["cache_read"].as_f64().unwrap_or(0.0),
+                cache_write: tier["cache_write"].as_f64().unwrap_or(0.0),
+            })
+        })
+        .collect()
 }

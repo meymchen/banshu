@@ -363,8 +363,13 @@ pub(crate) fn drive(
     MessageStream::new(stream)
 }
 
-/// Compute cost from token counts and per-million rates.
-pub(crate) fn compute_cost(usage: &Usage, rates: &ModelCost) -> Cost {
+/// Compute cost from token counts and per-million rates. When the model
+/// carries context tiers, total input usage (input + cache read + cache
+/// write) selects one request-wide rate set: the highest tier threshold the
+/// usage strictly exceeds, else the base rates.
+pub(crate) fn compute_cost(usage: &Usage, cost: &ModelCost) -> Cost {
+    let input_tokens = usage.input + usage.cache_read + usage.cache_write;
+    let rates = cost.rates_for_input(input_tokens);
     let per = |tokens: u64, rate: f64| tokens as f64 / 1_000_000.0 * rate;
     let input = per(usage.input, rates.input);
     let output = per(usage.output, rates.output);

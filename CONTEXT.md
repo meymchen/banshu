@@ -102,6 +102,30 @@ budget is preserved exactly or refused when it cannot fit remaining context,
 and zero-valued model limits stay unknown.
 _Avoid_: completion allowance, output clamp
 
+**Context Overflow** (`ErrorKind::ContextOverflow`, `is_context_overflow`,
+issue #53):
+One classification over every provider signal that a request exceeded the
+model's context window: overflow wording on a 400/413 error (Anthropic's
+"prompt is too long" / `request_too_large`, MiniMax's "context window exceeds
+limit", Kimi/Moonshot's "exceeded model token limit", DeepSeek/OpenAI-style
+"maximum context length" shapes), a successful response whose reported input
+usage exceeds a known window (z.ai), and a zero-output `length` stop on a
+window the input fills (Xiaomi). Classification is conservative by
+construction: the HTTP gate only reclassifies 400/413, rate-limit/throttle
+wording vetoes a match, and an unknown zero window never invents overflow from
+usage. A classification names its matched evidence in a bounded, redacted
+`ContextOverflow` diagnostic.
+_Avoid_: context too long, prompt overflow
+
+**Cost Tier** (`CostTier`, issue #53):
+An optional request-wide rate set on `ModelCost` (models.dev `cost.tiers`
+with `tier.type == "context"`). Total input usage — input + cache read +
+cache write — that strictly exceeds a tier's threshold selects that tier's
+rates for the whole request; at or below every threshold the base rates
+apply. A zero threshold is unknown metadata and never selects, and models
+without tiers keep flat-rate costs.
+_Avoid_: price band, usage bracket
+
 **Reasoning downgrade** (issue #40):
 The normalization rule for provider-private reasoning state. A thinking
 block's opaque signature — and a text block's `textSignature` — replays

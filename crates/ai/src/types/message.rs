@@ -33,6 +33,9 @@ const SENSITIVE_DIAGNOSTIC_LABELS: &[&str] = &[
 pub enum DiagnosticCode {
     /// An error reported by the upstream provider.
     ProviderError,
+    /// The provider-response evidence a context-overflow classification
+    /// matched.
+    ContextOverflow,
     /// A violation of the provider's wire protocol.
     ProtocolViolation,
     /// An image was replaced or omitted for compatibility.

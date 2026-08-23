@@ -72,6 +72,81 @@ pub struct ModelCost {
     pub cache_read: f64,
     /// Cache-write rate, $/1M tokens.
     pub cache_write: f64,
+    /// Optional request-wide pricing tiers (models.dev `cost.tiers` with
+    /// `tier.type == "context"`). The tier with the highest threshold the
+    /// request's total input usage *strictly exceeds* supplies every rate for
+    /// that request; at or below every threshold the base rates apply.
+    pub tiers: Vec<CostTier>,
+}
+
+/// A request-wide rate set that applies once total input usage exceeds a
+/// context threshold (e.g. Gemini's >200k pricing).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CostTier {
+    /// Total input usage (input + cache read + cache write) must strictly
+    /// exceed this token count for the tier to apply. Zero means the boundary
+    /// is unknown: such a tier never matches.
+    pub input_tokens_above: u32,
+    /// Input (prompt) rate, $/1M tokens.
+    pub input: f64,
+    /// Output (completion) rate, $/1M tokens.
+    pub output: f64,
+    /// Cache-read rate, $/1M tokens.
+    pub cache_read: f64,
+    /// Cache-write rate, $/1M tokens.
+    pub cache_write: f64,
+}
+
+/// One set of per-million-token rates — either a model's base rates or a
+/// matched [`CostTier`]'s.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CostRates {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+}
+
+impl From<&ModelCost> for CostRates {
+    fn from(cost: &ModelCost) -> Self {
+        Self {
+            input: cost.input,
+            output: cost.output,
+            cache_read: cost.cache_read,
+            cache_write: cost.cache_write,
+        }
+    }
+}
+
+impl From<&CostTier> for CostRates {
+    fn from(tier: &CostTier) -> Self {
+        Self {
+            input: tier.input,
+            output: tier.output,
+            cache_read: tier.cache_read,
+            cache_write: tier.cache_write,
+        }
+    }
+}
+
+impl ModelCost {
+    /// The effective rates for a request whose total input usage is
+    /// `input_tokens`: the highest tier whose threshold is strictly exceeded,
+    /// else the base rates. Zero-threshold tiers are unknown metadata and are
+    /// never selected.
+    pub(crate) fn rates_for_input(&self, input_tokens: u64) -> CostRates {
+        let mut rates = CostRates::from(self);
+        let mut matched = 0;
+        for tier in &self.tiers {
+            if tier.input_tokens_above > matched
+                && input_tokens > u64::from(tier.input_tokens_above)
+            {
+                matched = tier.input_tokens_above;
+                rates = CostRates::from(tier);
+            }
+        }
+        rates
+    }
 }
 
 /// Metadata describing a single model on a provider.
