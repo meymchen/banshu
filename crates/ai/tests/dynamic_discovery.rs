@@ -9,6 +9,8 @@ use banshu_ai::{
     ApiKind, InMemoryModelsStore, Modality, Model, Models, ModelsStore, ModelsStoreEntry, Provider,
     RefreshOptions, RefreshOutcome,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -202,6 +204,64 @@ async fn validators_make_304_refresh_fresh_without_clearing_overlay() {
 }
 
 #[tokio::test]
+async fn available_validators_are_sent_before_filling_a_missing_provider_entry() {
+    unsafe {
+        std::env::remove_var("CACHED_CATALOG_KEY");
+        std::env::remove_var("NEW_CATALOG_KEY");
+    };
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .and(header("if-none-match", "\"catalog-v1\""))
+        .respond_with(ResponseTemplate::new(304))
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(MODELS_DEV_JSON))
+        .with_priority(5)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let store = Arc::new(InMemoryModelsStore::new());
+    let mut cached = Model::openai_completions("cached-model");
+    cached.provider = "cached".into();
+    cached.base_url = server.uri();
+    store
+        .set(ModelsStoreEntry {
+            provider_id: "cached".into(),
+            models: vec![cached],
+            probed_model_ids: Vec::new(),
+            checked_at: SystemTime::now(),
+            etag: Some("\"catalog-v1\"".into()),
+            last_modified: None,
+        })
+        .await
+        .unwrap();
+    let models = Models::new()
+        .with_models_store(store)
+        .with_provider(
+            Provider::openai_compatible("cached", "Cached", server.uri(), ["CACHED_CATALOG_KEY"])
+                .with_models_dev_id("deepseek"),
+        )
+        .with_provider(
+            Provider::openai_compatible("new", "New", server.uri(), ["NEW_CATALOG_KEY"])
+                .with_models_dev_id("deepseek"),
+        );
+
+    models
+        .refresh_from(&format!("{}/api.json", server.uri()))
+        .await;
+
+    assert!(models.get("new", "deepseek-vnext").is_some());
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn cancelled_refresh_keeps_the_restored_overlay() {
     unsafe { std::env::remove_var("DEEPSEEK_API_KEY") };
 
@@ -252,20 +312,29 @@ async fn cancelled_refresh_keeps_the_restored_overlay() {
 async fn cancelled_probe_keeps_the_restored_overlay() {
     unsafe { std::env::set_var("CANCEL_PROBE_KEY", "k") };
 
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/models"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_secs(1))
-                .set_body_string(r#"{"data":[{"id":"replacement"}]}"#),
-        )
-        .mount(&server)
-        .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let (headers_sent, wait_for_headers) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 2048];
+        let bytes_read = socket.read(&mut request).await.unwrap();
+        assert!(bytes_read > 0, "probe request should reach the test server");
+        let body = br#"{"data":[{"id":"replacement"}]}"#;
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        socket.write_all(headers.as_bytes()).await.unwrap();
+        socket.flush().await.unwrap();
+        headers_sent.send(()).ok();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        socket.write_all(body).await.ok();
+    });
     let store = Arc::new(InMemoryModelsStore::new());
     let mut stored = Model::openai_completions("last-known-good");
     stored.provider = "cancel-probe".into();
-    stored.base_url = server.uri();
+    stored.base_url = base_url.clone();
     store
         .set(ModelsStoreEntry {
             provider_id: "cancel-probe".into(),
@@ -282,19 +351,19 @@ async fn cancelled_probe_keeps_the_restored_overlay() {
         .with_provider(Provider::openai_compatible(
             "cancel-probe",
             "Cancel Probe",
-            server.uri(),
+            base_url,
             ["CANCEL_PROBE_KEY"],
         ));
     let cancellation = banshu_ai::CancellationToken::new();
     let cancel = cancellation.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        wait_for_headers.await.unwrap();
         cancel.cancel();
     });
 
     models
         .refresh_from_with(
-            &format!("{}/api.json", server.uri()),
+            "http://127.0.0.1:1/api.json",
             &RefreshOptions {
                 force: true,
                 cancellation: Some(cancellation),

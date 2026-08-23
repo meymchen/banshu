@@ -187,31 +187,50 @@ impl Models {
             .zip(&stored)
             .filter(|(provider, _)| provider.models_dev_id().is_some())
             .collect();
-        let prior_validators = catalog_entries
-            .first()
-            .and_then(|(_, entry)| entry.as_ref())
+        let validator_entry = catalog_entries
+            .iter()
+            .filter_map(|(_, entry)| entry.as_ref())
+            .filter(|entry| entry.etag.is_some() || entry.last_modified.is_some())
+            .max_by_key(|entry| entry.checked_at);
+        let prior_validators = validator_entry
             .map(|entry| discovery::Validators {
                 etag: entry.etag.clone(),
                 last_modified: entry.last_modified.clone(),
             })
-            .filter(|first| {
-                catalog_entries.iter().all(|(_, entry)| {
-                    entry.as_ref().is_some_and(|entry| {
-                        entry.etag == first.etag && entry.last_modified == first.last_modified
-                    })
+            .unwrap_or_default();
+        let validators_cover_every_provider = validator_entry.is_none_or(|selected| {
+            catalog_entries.iter().all(|(_, entry)| {
+                entry.as_ref().is_some_and(|entry| {
+                    entry.etag == selected.etag && entry.last_modified == selected.last_modified
                 })
             })
-            .unwrap_or_default();
+        });
         let catalog = match self.providers.iter().find(|p| p.models_dev_id().is_some()) {
-            Some(provider) => Some(
-                discovery::fetch_models_dev_with(
+            Some(provider) => {
+                let conditional = discovery::fetch_models_dev_with(
                     provider.http_client(),
                     catalog_url,
                     prior_validators,
                     options.cancellation.as_ref(),
                 )
-                .await,
-            ),
+                .await;
+                match conditional {
+                    Ok(discovery::CatalogResponse::NotModified(_))
+                        if !validators_cover_every_provider =>
+                    {
+                        Some(
+                            discovery::fetch_models_dev_with(
+                                provider.http_client(),
+                                catalog_url,
+                                discovery::Validators::default(),
+                                options.cancellation.as_ref(),
+                            )
+                            .await,
+                        )
+                    }
+                    outcome => Some(outcome),
+                }
+            }
             None => None,
         };
         let entries = futures_util::future::join_all(self.providers.iter().zip(stored.iter()).map(|(provider, prior)| {

@@ -906,10 +906,12 @@ impl Provider {
         if !status.is_success() {
             return RefreshOutcome::Failed(format!("list-models returned HTTP {status}"));
         }
-        let listed: crate::discovery::ListModelsResponse = match response.json().await {
-            Ok(listed) => listed,
-            Err(err) => return RefreshOutcome::Failed(err.to_string()),
-        };
+        let listed: crate::discovery::ListModelsResponse =
+            match crate::cancel::race(cancellation, response.json()).await {
+                Err(_) => return RefreshOutcome::Failed("cancelled".into()),
+                Ok(Ok(listed)) => listed,
+                Ok(Err(err)) => return RefreshOutcome::Failed(err.to_string()),
+            };
         let probed = listed
             .data
             .into_iter()
