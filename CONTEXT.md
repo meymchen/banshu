@@ -460,6 +460,12 @@ it stays for diagnosis and the caller gets `Error::ReLoginRequired`; a
 transient failure likewise preserves it and reports `Error::Auth`.
 _Avoid_: refresh dedup, token lock
 
+**Faux Provider** (`FauxProvider`, issue #56):
+A keyless, network-free provider whose repeatable script exercises the public
+streaming contract, including timing, cancellation, setup retries, content,
+usage, and in-band failures.
+_Avoid_: mock server, fake HTTP provider
+
 **Context Snapshot** (`ContextSnapshotV1`):
 The versioned JSON persistence format for a `Context`, pinned by a golden
 fixture. The serialized shape (camelCase, `role`/`type` tags) is a published

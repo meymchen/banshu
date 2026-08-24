@@ -23,6 +23,7 @@ pub mod api;
 #[doc(hidden)]
 pub mod models_dev;
 pub mod provider;
+pub mod testing;
 
 mod auth;
 mod cancel;
