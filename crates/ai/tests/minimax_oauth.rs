@@ -9,6 +9,8 @@
 //! ever used, region is never inferred from IP, and token material must never
 //! appear in errors or diagnostics.
 
+mod common;
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -490,25 +492,26 @@ async fn cancellation_aborts_the_login() {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(token_pending_response())
+        .expect(0)
         .mount(&server)
         .await;
 
     let rig = rig(MiniMaxRegion::Global, &server.uri());
     let token = banshu_ai::CancellationToken::new();
-    let interaction = AuthInteraction::new(Arc::new(RecordingHandler::default()))
-        .with_cancellation(token.clone());
+    let interaction = common::cancelling_interaction(token);
 
-    let provider_id = rig.provider_id;
-    let login = tokio::spawn(async move { rig.models.login(provider_id, &interaction).await });
-    // Let the first poll land, then cancel while the flow waits out the
-    // interval.
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    token.cancel();
-
-    assert!(matches!(
-        login.await.unwrap().unwrap_err(),
-        Error::AuthCancelled
-    ));
+    // The browser callback cancels after authorization succeeds but before
+    // token polling starts, so the real flow exercises `interaction.wait`
+    // without racing HTTP keep-alive or wall-clock sleeps.
+    let err = rig
+        .models
+        .login(rig.provider_id, &interaction)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::AuthCancelled),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[tokio::test]
