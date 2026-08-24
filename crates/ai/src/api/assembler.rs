@@ -4,8 +4,9 @@
 //!
 //! Ordering violations — a delta/end for an unknown block, a duplicate start,
 //! a type mismatch between a block's start and a later event referencing it,
-//! or any content-block event after [`ProtocolEvent::Stop`] — are reported as
-//! [`ErrorKind::Protocol`] rather than silently accepted or panicking.
+//! or any content-block event after [`ProtocolEvent::Stop`] or
+//! [`ProtocolEvent::StopWithRaw`] — are reported as [`ErrorKind::Protocol`]
+//! rather than silently accepted or panicking.
 
 use std::collections::HashMap;
 
@@ -85,7 +86,7 @@ impl MessageAssembler {
     /// are not synthetically ended.
     pub(crate) fn abort(&mut self, message: impl Into<String>) -> AssistantMessageEvent {
         self.stopped = true;
-        self.message.stop_reason = StopReason::Aborted;
+        self.set_library_stop_reason(StopReason::Aborted);
         self.message.error_message = Some(message.into());
         AssistantMessageEvent::Error {
             reason: StopReason::Aborted,
@@ -338,13 +339,19 @@ impl MessageAssembler {
                 self.message.stop_reason = reason;
                 None
             }
+            ProtocolEvent::StopWithRaw { reason, raw_reason } => {
+                self.stopped = true;
+                self.message.stop_reason = reason;
+                self.message.raw_stop_reason = Some(raw_reason);
+                None
+            }
             ProtocolEvent::Failure {
                 kind,
                 message,
                 diagnostics,
             } => {
                 self.message.diagnostics.extend(diagnostics);
-                self.message.stop_reason = StopReason::Error;
+                self.set_library_stop_reason(StopReason::Error);
                 self.message.error_kind = Some(kind);
                 self.message.error_message = Some(message);
                 Some(AssistantMessageEvent::Error {
@@ -401,7 +408,7 @@ impl MessageAssembler {
 
     fn violation(&mut self, detail: impl Into<String>) -> AssistantMessageEvent {
         let detail = detail.into();
-        self.message.stop_reason = StopReason::Error;
+        self.set_library_stop_reason(StopReason::Error);
         self.message.error_kind = Some(ErrorKind::Protocol);
         self.message.error_message = Some(detail.clone());
         self.message
@@ -411,6 +418,12 @@ impl MessageAssembler {
             reason: StopReason::Error,
             error: self.message.clone(),
         }
+    }
+
+    /// Replace provider stop metadata with a library-generated terminal.
+    fn set_library_stop_reason(&mut self, reason: StopReason) {
+        self.message.stop_reason = reason;
+        self.message.raw_stop_reason = None;
     }
 }
 
@@ -708,6 +721,71 @@ mod tests {
         let message = a.into_message();
         assert_eq!(message.usage.input, 10);
         assert_eq!(message.stop_reason, StopReason::Length);
+    }
+
+    #[test]
+    fn raw_stop_reason_lands_on_the_assembled_message() {
+        let mut a = assembler();
+        assert!(
+            a.apply(ProtocolEvent::StopWithRaw {
+                reason: StopReason::Unknown,
+                raw_reason: "provider_future_reason".into(),
+            })
+            .is_none()
+        );
+        let message = a.into_message();
+        assert_eq!(message.stop_reason, StopReason::Unknown);
+        assert_eq!(
+            message.raw_stop_reason.as_deref(),
+            Some("provider_future_reason")
+        );
+    }
+
+    #[test]
+    fn library_generated_terminals_clear_a_preceding_raw_stop_reason() {
+        fn stopped_assembler() -> MessageAssembler {
+            let mut assembler = assembler();
+            assert!(
+                assembler
+                    .apply(ProtocolEvent::StopWithRaw {
+                        reason: StopReason::Stop,
+                        raw_reason: "provider_stop".into(),
+                    })
+                    .is_none()
+            );
+            assembler
+        }
+
+        let mut aborted = stopped_assembler();
+        let AssistantMessageEvent::Error { error, .. } = aborted.abort("cancelled") else {
+            unreachable!("abort always returns an Error event");
+        };
+        assert_eq!(error.raw_stop_reason, None);
+
+        let mut failed = stopped_assembler();
+        let event = failed
+            .apply(ProtocolEvent::Failure {
+                kind: ErrorKind::Api,
+                message: "failed".into(),
+                diagnostics: Vec::new(),
+            })
+            .expect("Failure always returns an Error event");
+        let AssistantMessageEvent::Error { error, .. } = event else {
+            unreachable!("Failure always returns an Error event");
+        };
+        assert_eq!(error.raw_stop_reason, None);
+
+        let mut violated = stopped_assembler();
+        let event = violated
+            .apply(ProtocolEvent::TextStart {
+                block_id: 1,
+                signature: None,
+            })
+            .expect("content after Stop is a protocol error");
+        let AssistantMessageEvent::Error { error, .. } = event else {
+            unreachable!("a protocol violation returns an Error event");
+        };
+        assert_eq!(error.raw_stop_reason, None);
     }
 
     #[test]

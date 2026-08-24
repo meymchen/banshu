@@ -80,6 +80,13 @@ and stream dispatch by model id.
 A failure delivered as a stream event carrying partial content, not a
 `Result::Err`. Only setup/config errors are `Result`s.
 
+**Raw Stop Reason** (`AssistantMessage::raw_stop_reason`, issue #54):
+The provider's exact terminal vocabulary for why generation ended, preserved
+alongside banshu's stable cross-provider `StopReason`. It is diagnostic rather
+than portable: known values retain their existing normalized behavior, while
+an unrecognized value normalizes to `Unknown` without losing the original.
+_Avoid_: finish reason, provider stop code
+
 **Context normalization** (issue #39):
 The one pass that resolves every cross-model rule, run in stream dispatch
 before either protocol adapter builds its wire payload. It takes the caller's

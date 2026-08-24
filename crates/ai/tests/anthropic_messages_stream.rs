@@ -58,7 +58,58 @@ async fn streams_a_minimal_text_completion() {
     let message = provider.stream(&model, &context, &options).finish().await;
 
     assert_eq!(message.stop_reason, StopReason::Stop);
+    assert_eq!(message.raw_stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(message.text(), "Hello, world!");
     assert_eq!(message.usage.input, 10);
     assert_eq!(message.usage.output, 5);
+}
+
+#[tokio::test]
+async fn preserves_known_and_unknown_anthropic_stop_reasons() {
+    for (raw, normalized) in [
+        ("end_turn", StopReason::Stop),
+        ("stop_sequence", StopReason::Stop),
+        ("max_tokens", StopReason::Length),
+        ("tool_use", StopReason::ToolUse),
+        ("pause_turn", StopReason::Stop),
+        ("refusal", StopReason::Stop),
+        ("model_context_window_exceeded", StopReason::Stop),
+        ("future_reason", StopReason::Unknown),
+    ] {
+        let server = MockServer::start().await;
+        let body = format!(
+            concat!(
+                "data: {{\"type\":\"message_start\",\"message\":{{\"usage\":{{\"input_tokens\":1,\"output_tokens\":0}}}}}}\n\n",
+                "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"{raw}\"}},\"usage\":{{\"output_tokens\":1}}}}\n\n",
+                "data: {{\"type\":\"message_stop\"}}\n\n",
+            ),
+            raw = raw,
+        );
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = Provider::anthropic_compatible("zai", "Z.AI", server.uri(), ["ZAI_API_KEY"]);
+        let model = Model::anthropic_messages("glm-4.6").with_base_url(server.uri());
+        let message = provider
+            .stream(
+                &model,
+                &Context::new().user("hi"),
+                &StreamOptions {
+                    api_key: Some("test-key".into()),
+                    ..Default::default()
+                },
+            )
+            .finish()
+            .await;
+
+        assert_eq!(message.stop_reason, normalized, "raw reason: {raw}");
+        assert_eq!(message.raw_stop_reason.as_deref(), Some(raw));
+    }
 }

@@ -200,6 +200,8 @@ async fn normal_length_and_tooluse_each_terminate_once() {
         ("stop", StopReason::Stop),
         ("length", StopReason::Length),
         ("tool_calls", StopReason::ToolUse),
+        ("content_filter", StopReason::Stop),
+        ("function_call", StopReason::Stop),
     ] {
         let body = format!(
             concat!(
@@ -217,9 +219,33 @@ async fn normal_length_and_tooluse_each_terminate_once() {
             "{finish} must terminate exactly once"
         );
         match events.last() {
-            Some(AssistantMessageEvent::Done { reason, .. }) => assert_eq!(*reason, expected),
+            Some(AssistantMessageEvent::Done { reason, message }) => {
+                assert_eq!(*reason, expected);
+                assert_eq!(message.raw_stop_reason.as_deref(), Some(finish));
+            }
             other => panic!("expected a Done for {finish}, got {other:?}"),
         }
+    }
+}
+
+/// A provider value outside the adapter's documented vocabulary remains
+/// observable without being mislabeled as a natural stop.
+#[tokio::test]
+async fn unknown_raw_stop_reason_is_preserved_without_a_known_classification() {
+    let body = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"},\"finish_reason\":\"future_reason\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let server = server_with(body).await;
+    let events = collect(&server).await;
+
+    match events.last() {
+        Some(AssistantMessageEvent::Done { reason, message }) => {
+            assert_eq!(*reason, StopReason::Unknown);
+            assert_eq!(message.stop_reason, StopReason::Unknown);
+            assert_eq!(message.raw_stop_reason.as_deref(), Some("future_reason"));
+        }
+        other => panic!("expected a Done for an unknown raw stop reason, got {other:?}"),
     }
 }
 

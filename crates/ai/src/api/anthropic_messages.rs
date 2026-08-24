@@ -105,6 +105,7 @@ impl ProtocolAdapter for AnthropicMessages {
             let mut blocks: Vec<Option<WireBlock>> = Vec::new();
             let mut usage = Usage::default();
             let mut stop_reason = StopReason::Stop;
+            let mut raw_stop_reason = None;
             // `message_stop` is the only success signal; a bare EOF without it
             // is a dropped connection, not a completed response.
             let mut saw_message_stop = false;
@@ -226,6 +227,7 @@ impl ProtocolAdapter for AnthropicMessages {
                     Some("message_delta") => {
                         if let Some(reason) = value["delta"]["stop_reason"].as_str() {
                             stop_reason = map_stop_reason(reason);
+                            raw_stop_reason = Some(reason.to_string());
                         }
                         let wire = &value["usage"];
                         if let Some(output) = wire["output_tokens"].as_u64() {
@@ -271,7 +273,7 @@ impl ProtocolAdapter for AnthropicMessages {
             usage.total_tokens = usage.input + usage.output + usage.cache_read + usage.cache_write;
             usage.cost = compute_cost(&usage, &cost);
             yield ProtocolEvent::Usage(usage);
-            yield ProtocolEvent::Stop(stop_reason);
+            yield ProtocolEvent::stop(stop_reason, raw_stop_reason);
         };
 
         Box::pin(stream)
@@ -485,9 +487,14 @@ fn thinking_wire(
 /// Map an Anthropic `stop_reason` to a banshu [`StopReason`].
 fn map_stop_reason(reason: &str) -> StopReason {
     match reason {
+        "end_turn"
+        | "stop_sequence"
+        | "pause_turn"
+        | "refusal"
+        | "model_context_window_exceeded" => StopReason::Stop,
         "max_tokens" => StopReason::Length,
         "tool_use" => StopReason::ToolUse,
-        _ => StopReason::Stop,
+        _ => StopReason::Unknown,
     }
 }
 

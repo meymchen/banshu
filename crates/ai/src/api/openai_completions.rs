@@ -93,6 +93,7 @@ impl ProtocolAdapter for OpenAiCompletions {
             let mut tools: Vec<ToolAccum> = Vec::new();
             let mut usage = Usage::default();
             let mut stop_reason = StopReason::Stop;
+            let mut raw_stop_reason = None;
             // The OpenAI wire terminator is `data: [DONE]`, but some
             // compatible servers close the connection right after the
             // finish_reason-bearing chunk without sending it; either counts
@@ -259,6 +260,7 @@ impl ProtocolAdapter for OpenAiCompletions {
                     }
                     if let Some(reason) = choice.finish_reason {
                         stop_reason = map_stop_reason(&reason);
+                        raw_stop_reason = Some(reason);
                         terminated_formally = true;
                     }
                 }
@@ -290,7 +292,7 @@ impl ProtocolAdapter for OpenAiCompletions {
 
             usage.cost = compute_cost(&usage, &cost);
             yield ProtocolEvent::Usage(usage);
-            yield ProtocolEvent::Stop(stop_reason);
+            yield ProtocolEvent::stop(stop_reason, raw_stop_reason);
         };
 
         Box::pin(stream)
@@ -312,9 +314,10 @@ struct ToolAccum {
 /// Map an OpenAI `finish_reason` to a banshu [`StopReason`].
 fn map_stop_reason(reason: &str) -> StopReason {
     match reason {
+        "stop" | "content_filter" | "function_call" => StopReason::Stop,
         "length" => StopReason::Length,
         "tool_calls" => StopReason::ToolUse,
-        _ => StopReason::Stop,
+        _ => StopReason::Unknown,
     }
 }
 

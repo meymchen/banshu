@@ -168,8 +168,9 @@ pub trait ProtocolAdapter: Send + Sync {
     fn kind(&self) -> ApiKind;
 
     /// Open a streamed completion for a fully-resolved request. The stream
-    /// must end after a [`ProtocolEvent::Stop`] or [`ProtocolEvent::Failure`];
-    /// ending without either is reported as an [`ErrorKind::Protocol`] error.
+    /// must end after a [`ProtocolEvent::Stop`],
+    /// [`ProtocolEvent::StopWithRaw`], or [`ProtocolEvent::Failure`]; ending
+    /// without one is reported as an [`ErrorKind::Protocol`] error.
     fn stream(&self, request: PreparedRequest) -> ProtocolEventStream;
 }
 
@@ -332,8 +333,8 @@ pub(crate) fn drive(
                 }
             };
             let Some(event) = next else { break };
-            if let ProtocolEvent::Stop(reason) = &event {
-                stop_reason = Some(*reason);
+            if let Some(reason) = event.normalized_stop_reason() {
+                stop_reason = Some(reason);
             }
             // Keep applying after `Stop`: content events that illegally
             // follow it must reach the assembler, which converts them into
@@ -349,7 +350,7 @@ pub(crate) fn drive(
         let Some(reason) = stop_reason else {
             yield assembler.fail(
                 ErrorKind::Protocol,
-                "protocol adapter stream ended without a Stop or Failure event",
+                "protocol adapter stream ended without a Stop, StopWithRaw, or Failure event",
                 Vec::new(),
             );
             return;
