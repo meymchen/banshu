@@ -4,8 +4,8 @@
 //! response-header wait, retry backoff sleeps, and SSE body reads — each
 //! terminating the stream with a single `Error { reason: Aborted }` that
 //! preserves whatever content had already streamed, with no further retries.
-//! Plain-drop (no token at all) must still tear down the underlying HTTP
-//! connection instead of leaking it.
+//! Plain-drop (no token at all) must still tear down the in-flight protocol
+//! future instead of leaving orphaned work behind.
 //!
 //! None of these tests sleep in real time: each cancellation point is
 //! exercised by holding that specific await point open (a resolver that
@@ -14,11 +14,12 @@
 //! timer, or — for the retry-backoff case — paused tokio time.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use banshu_ai::{
-    AssistantMessageEvent, Auth, AuthResolver, CancellationToken, Context, Model, Provider,
-    ResolvedAuth, Result, StopReason, StreamOptions, async_trait,
+    ApiKind, AssistantMessageEvent, Auth, AuthResolver, CancellationToken, Context, Model,
+    PreparedRequest, ProtocolAdapter, ProtocolEvent, ProtocolEventStream, Provider, ResolvedAuth,
+    Result, StopReason, StreamOptions, async_trait,
 };
 use futures_util::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -386,53 +387,65 @@ async fn cancel_mid_tool_call_preserves_partial_arguments() {
     }
 }
 
+struct DropFlag(Arc<AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+struct HangingProtocol {
+    dropped: Arc<AtomicBool>,
+}
+
+impl ProtocolAdapter for HangingProtocol {
+    fn kind(&self) -> ApiKind {
+        ApiKind::OpenAiCompletions
+    }
+
+    fn stream(&self, _request: PreparedRequest) -> ProtocolEventStream {
+        let dropped = self.dropped.clone();
+        Box::pin(async_stream::stream! {
+            let _drop_flag = DropFlag(dropped);
+            yield ProtocolEvent::TextStart {
+                block_id: 0,
+                signature: None,
+            };
+            std::future::pending::<()>().await;
+        })
+    }
+}
+
 #[tokio::test]
-async fn dropping_the_stream_without_cancelling_still_closes_the_connection() {
-    let established = Arc::new(Notify::new());
-    let closed = Arc::new(Notify::new());
-    let established_clone = established.clone();
-    let closed_clone = closed.clone();
+async fn dropping_the_stream_without_cancelling_drops_the_in_flight_protocol_future() {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let mut model = Model::openai_completions("m");
+    model.provider = "p".into();
+    let provider = Provider::builder("p", "P", "http://localhost")
+        .adapter(Arc::new(HangingProtocol {
+            dropped: dropped.clone(),
+        }))
+        .model(model.clone())
+        .build()
+        .expect("valid provider");
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local_addr");
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf).await;
-        let response = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n";
-        let _ = socket.write_all(response.as_bytes()).await;
-        let _ = socket.flush().await;
-        established_clone.notify_one();
-        // The client never sends anything further; a read returning Ok(0)
-        // (EOF) or an error means it closed its side of the connection.
-        let mut scratch = [0u8; 16];
-        let _ = socket.read(&mut scratch).await;
-        closed_clone.notify_one();
-    });
-
-    let base_url = format!("http://{addr}");
-    let provider = Provider::openai_compatible("p", "P", base_url.clone(), ["UNUSED"]);
-    let model = Model::openai_completions("m").with_base_url(base_url);
-    // Deliberately no `cancellation` token: this exercises plain drop.
-    let options = StreamOptions {
-        api_key: Some("k".into()),
-        ..Default::default()
-    };
-
-    let mut stream = provider.stream(&model, &context(), &options);
+    // Deliberately no cancellation token: plain drop must still tear down the
+    // in-flight adapter future instead of leaving a background task behind.
+    let mut stream = provider.stream(&model, &context(), &StreamOptions::default());
     assert!(matches!(
         stream.next().await,
         Some(AssistantMessageEvent::Start)
     ));
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::TextStart { .. })
+    ));
 
-    let handle = tokio::spawn(async move { stream.next().await });
-    established.notified().await;
-    // Abort the task holding the stream without it ever observing a
-    // terminal event — proving the underlying connection still tears down.
-    handle.abort();
-    let _ = handle.await;
+    drop(stream);
 
-    tokio::time::timeout(Duration::from_secs(2), closed.notified())
-        .await
-        .expect("dropping the stream should close the underlying TCP connection, not leak it");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "dropping MessageStream must synchronously drop its in-flight protocol future"
+    );
 }
