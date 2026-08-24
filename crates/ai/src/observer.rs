@@ -202,11 +202,7 @@ fn redact_url(url: &str) -> String {
             let _ = parsed.set_password(None);
             parsed.into()
         }
-        Err(_) => url
-            .split(['?', '#'])
-            .next()
-            .unwrap_or_default()
-            .to_string(),
+        Err(_) => url.split(['?', '#']).next().unwrap_or_default().to_string(),
     }
 }
 
@@ -333,7 +329,10 @@ mod tests {
         });
         let sanitized = sanitize_payload(payload);
         let text = sanitized.to_string();
-        assert!(!text.contains("sk-live-123"), "labeled secret leaked: {text}");
+        assert!(
+            !text.contains("sk-live-123"),
+            "labeled secret leaked: {text}"
+        );
         assert!(!text.contains("tok-abc"), "bearer token leaked: {text}");
         assert!(
             !text.contains(&"a".repeat(128)),
@@ -346,10 +345,7 @@ mod tests {
     #[test]
     fn payload_sanitization_keeps_short_base64_like_words() {
         let payload = serde_json::json!({"content": "deadbeef is short"});
-        assert_eq!(
-            sanitize_payload(payload)["content"],
-            "deadbeef is short"
-        );
+        assert_eq!(sanitize_payload(payload)["content"], "deadbeef is short");
     }
 
     #[test]

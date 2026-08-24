@@ -338,8 +338,7 @@ async fn anthropic_requests_are_observed_with_redacted_api_key() {
         .expect(1)
         .mount(&server)
         .await;
-    let provider =
-        Provider::anthropic_compatible("kimi", "Kimi", server.uri(), ["KIMI_API_KEY"]);
+    let provider = Provider::anthropic_compatible("kimi", "Kimi", server.uri(), ["KIMI_API_KEY"]);
     let model = Model::anthropic_messages("kimi-for-coding").with_base_url(server.uri());
     let observer = Arc::new(RecordingObserver::default());
 
