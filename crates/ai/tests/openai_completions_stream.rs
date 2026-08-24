@@ -46,6 +46,7 @@ async fn streams_a_minimal_text_completion() {
     let message = provider.stream(&model, &context, &options).finish().await;
 
     assert_eq!(message.stop_reason, StopReason::Stop);
+    assert_eq!(message.raw_stop_reason.as_deref(), Some("stop"));
     assert_eq!(message.text(), "Hello, world!");
     assert_eq!(message.usage.input, 10);
     assert_eq!(message.usage.output, 5);

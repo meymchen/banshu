@@ -203,7 +203,11 @@ fn redact_long_base64_runs(message: &str) -> String {
     output
 }
 
-/// Why a completion stopped.
+/// Provider-independent classification of why a completion stopped.
+///
+/// This vocabulary is stable across providers. When inspecting provider
+/// compatibility or newly introduced wire values, use
+/// [`AssistantMessage::raw_stop_reason`] alongside this classification.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -218,6 +222,9 @@ pub enum StopReason {
     Error,
     /// The request was aborted by the caller.
     Aborted,
+    /// The provider reported a stop reason this version does not recognize.
+    /// See [`AssistantMessage::raw_stop_reason`] for the exact wire value.
+    Unknown,
 }
 
 /// A user turn.
@@ -309,8 +316,18 @@ pub struct AssistantMessage {
     pub diagnostics: Vec<Diagnostic>,
     /// Token usage and cost.
     pub usage: Usage,
-    /// Why the completion stopped.
+    /// Stable, provider-independent classification of why the completion
+    /// stopped. Provider vocabularies may evolve independently; when this is
+    /// [`StopReason::Unknown`], inspect [`Self::raw_stop_reason`].
     pub stop_reason: StopReason,
+    /// Exact provider `finish_reason`/`stop_reason`, when one was received.
+    ///
+    /// Unlike [`Self::stop_reason`], this value is provider-defined and is not
+    /// a stable cross-provider vocabulary. It is preserved verbatim so callers
+    /// can diagnose provider compatibility changes. Library-generated error
+    /// and aborted terminations leave it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_stop_reason: Option<String>,
     /// Human-readable error, set when `stop_reason` is `Error`/`Aborted`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
@@ -336,6 +353,7 @@ impl AssistantMessage {
             diagnostics: Vec::new(),
             usage: Usage::default(),
             stop_reason: StopReason::ToolUse,
+            raw_stop_reason: None,
             error_message: None,
             error_kind: None,
             timestamp: now_ms(),
@@ -354,6 +372,7 @@ impl AssistantMessage {
             diagnostics: Vec::new(),
             usage: Usage::default(),
             stop_reason: StopReason::Stop,
+            raw_stop_reason: None,
             error_message: None,
             error_kind: None,
             timestamp: now_ms(),

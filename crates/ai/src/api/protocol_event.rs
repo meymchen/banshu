@@ -25,9 +25,10 @@ pub type ProtocolEventStream = Pin<Box<dyn Stream<Item = ProtocolEvent> + Send +
 /// One incremental event from a protocol adapter.
 ///
 /// Every event after a block's `*Start` reuses that block's `block_id`. A
-/// well-formed stream ends with exactly one [`Stop`](Self::Stop) or
-/// [`Failure`](Self::Failure); ending the stream without either is a protocol
-/// violation the driver reports as [`ErrorKind::Protocol`].
+/// well-formed stream ends with exactly one [`Stop`](Self::Stop),
+/// [`StopWithRaw`](Self::StopWithRaw), or [`Failure`](Self::Failure); ending
+/// the stream without one is a protocol violation the driver reports as
+/// [`ErrorKind::Protocol`].
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum ProtocolEvent {
@@ -129,6 +130,16 @@ pub enum ProtocolEvent {
     /// The completion stopped for this reason; no further content blocks may
     /// start after this event.
     Stop(StopReason),
+    /// The completion stopped with both its normalized classification and the
+    /// exact provider value. Built-in adapters use this when the wire exposes
+    /// a stop reason; custom adapters may keep using [`Self::Stop`] when no raw
+    /// provider value is available.
+    StopWithRaw {
+        /// Stable cross-provider classification.
+        reason: StopReason,
+        /// Exact provider-defined wire value.
+        raw_reason: String,
+    },
     /// A terminal failure.
     Failure {
         /// Classification for `AssistantMessage.error_kind`.
@@ -138,4 +149,26 @@ pub enum ProtocolEvent {
         /// Bounded, redacted detail for `AssistantMessage.diagnostics`.
         diagnostics: Vec<Diagnostic>,
     },
+}
+
+impl ProtocolEvent {
+    /// Build the appropriate terminal event from normalized and optional raw
+    /// stop metadata. Keeping this choice here prevents adapters from each
+    /// reimplementing the compatibility path for custom adapters that still
+    /// emit [`Self::Stop`].
+    pub(crate) fn stop(reason: StopReason, raw_reason: Option<String>) -> Self {
+        match raw_reason {
+            Some(raw_reason) => Self::StopWithRaw { reason, raw_reason },
+            None => Self::Stop(reason),
+        }
+    }
+
+    /// Return the normalized reason carried by either successful terminal
+    /// event shape.
+    pub(crate) fn normalized_stop_reason(&self) -> Option<StopReason> {
+        match self {
+            Self::Stop(reason) | Self::StopWithRaw { reason, .. } => Some(*reason),
+            _ => None,
+        }
+    }
 }

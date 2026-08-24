@@ -73,6 +73,7 @@ fn fixture_context() -> Context {
             },
         },
         stop_reason: StopReason::ToolUse,
+        raw_stop_reason: None,
         error_message: None,
         error_kind: None,
         timestamp: 1_752_900_001_000,
@@ -115,6 +116,7 @@ fn fixture_context() -> Context {
         diagnostics: Vec::new(),
         usage: Usage::default(),
         stop_reason: StopReason::Error,
+        raw_stop_reason: None,
         error_message: Some("provider closed the stream mid-response".to_string()),
         error_kind: Some(ErrorKind::StreamInterrupted),
         timestamp: 1_752_900_003_000,
@@ -165,6 +167,31 @@ fn round_trips_an_error_tool_result() {
     let restored: ContextSnapshotV1 = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(restored.context, context);
     assert!(json.contains("\"isError\":true"));
+}
+
+#[test]
+fn raw_stop_reason_uses_an_optional_camel_case_extension_field() {
+    let mut assistant = AssistantMessage::from_content(Vec::new());
+    assistant.stop_reason = StopReason::Unknown;
+    assistant.raw_stop_reason = Some("provider_future_reason".to_string());
+    let snapshot = ContextSnapshotV1::new(
+        Context::new().with_message(Message::Assistant(Box::new(assistant))),
+    );
+
+    let value = serde_json::to_value(&snapshot).expect("serialize");
+    assert_eq!(
+        value["context"]["messages"][0]["rawStopReason"],
+        serde_json::json!("provider_future_reason")
+    );
+    let restored: ContextSnapshotV1 = serde_json::from_value(value).expect("deserialize");
+    let Message::Assistant(message) = &restored.context.messages[0] else {
+        panic!("expected assistant message");
+    };
+    assert_eq!(message.stop_reason, StopReason::Unknown);
+    assert_eq!(
+        message.raw_stop_reason.as_deref(),
+        Some("provider_future_reason")
+    );
 }
 
 #[test]
@@ -323,6 +350,10 @@ fn enums_serialize_to_stable_string_values() {
         StopReason::Aborted
     );
     assert_eq!(
+        serde_json::to_value(StopReason::Unknown).unwrap(),
+        serde_json::json!("unknown")
+    );
+    assert_eq!(
         serde_json::from_value::<ErrorKind>(serde_json::json!("streamInterrupted")).unwrap(),
         ErrorKind::StreamInterrupted
     );
@@ -374,6 +405,7 @@ fn optional_fields_are_omitted_when_absent() {
     let failed = &value["context"]["messages"][3];
     assert!(failed.get("responseModel").is_none());
     assert!(failed.get("responseId").is_none());
+    assert!(failed.get("rawStopReason").is_none());
     assert!(failed.get("diagnostics").is_none());
     assert!(failed["usage"].get("cacheWrite1h").is_none());
     assert!(failed["usage"].get("reasoning").is_none());

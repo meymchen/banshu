@@ -103,7 +103,10 @@ pub enum AssistantMessageEvent {
     },
     /// Terminal success — the final assembled message.
     Done {
-        /// Why the completion stopped (`Stop`, `Length`, or `ToolUse`).
+        /// Why the completion stopped (`Stop`, `Length`, `ToolUse`, or
+        /// `Unknown`). `Unknown` preserves the normalized API's stability when
+        /// a provider introduces a reason the library does not recognize; the
+        /// exact provider value remains in [`AssistantMessage::raw_stop_reason`].
         reason: StopReason,
         /// The final message.
         message: AssistantMessage,

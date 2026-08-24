@@ -55,6 +55,7 @@ fn assert_single_aborted(events: &[AssistantMessageEvent]) -> &banshu_ai::Assist
             error,
         } => {
             assert_eq!(error.stop_reason, StopReason::Aborted);
+            assert_eq!(error.raw_stop_reason, None);
             error
         }
         other => panic!("expected an Aborted terminal, got {other:?}"),
