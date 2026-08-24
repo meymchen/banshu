@@ -44,6 +44,22 @@ pub(crate) struct SendFailure {
     pub diagnostics: Vec<Diagnostic>,
     /// Server-provided retry hint, if any.
     pub retry_after: Option<Duration>,
+    /// Status and headers of the error response, when one arrived (any
+    /// non-2xx status); `None` for a transport failure, where no response
+    /// ever came back. Kept so the request observer can report a response
+    /// whose body was consumed for diagnostics. Boxed: a `HeaderMap` is
+    /// large, and this struct is the `Err` variant of [`send_once`]'s
+    /// `Result` (clippy `result_large_err`).
+    pub response: Option<Box<ErrorResponseMetadata>>,
+}
+
+/// The header-level facts of a non-2xx response, captured before its body is
+/// consumed for error diagnostics.
+pub(crate) struct ErrorResponseMetadata {
+    /// The HTTP status code.
+    pub status: u16,
+    /// The response headers.
+    pub headers: reqwest::header::HeaderMap,
 }
 
 /// Send one attempt: a transport error or non-2xx status becomes a classified
@@ -57,6 +73,10 @@ pub(crate) async fn send_once(
         Ok(response) => {
             let status = response.status();
             let retry_after = retry_after(response.headers());
+            let metadata = Box::new(ErrorResponseMetadata {
+                status: status.as_u16(),
+                headers: response.headers().clone(),
+            });
             let raw_body = response.text().await.unwrap_or_default();
             let body: String = raw_body.chars().take(MAX_ERROR_BODY_CHARS).collect();
             let parsed = parse_error_body(status.as_u16(), &body);
@@ -76,6 +96,7 @@ pub(crate) async fn send_once(
                 detail: parsed.summary,
                 diagnostics,
                 retry_after,
+                response: Some(metadata),
             })
         }
         Err(err) => Err(SendFailure {
@@ -83,6 +104,7 @@ pub(crate) async fn send_once(
             detail: format!("request failed: {err}"),
             diagnostics: Vec::new(),
             retry_after: None,
+            response: None,
         }),
     }
 }

@@ -16,6 +16,7 @@ use super::{PreparedRequest, ProtocolAdapter, ProtocolEventStream, compute_cost}
 use crate::CacheRetention;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
+use crate::observer::ObservationPlan;
 use crate::provider::{AnthropicCompat, AnthropicReasoningFormat};
 use crate::types::{
     ApiKind, AssistantContent, CapabilitySupport, Context, Message, Model, ReasoningEffort,
@@ -64,7 +65,9 @@ impl ProtocolAdapter for AnthropicMessages {
             protocol_headers.insert("x-session-affinity".to_string(), Some(session_id));
         }
         let final_headers = request.headers_with_protocol_defaults(&protocol_headers);
+        let observer = request.options.observer.clone();
         let PreparedRequest {
+            provider,
             model,
             context,
             options,
@@ -73,14 +76,18 @@ impl ProtocolAdapter for AnthropicMessages {
             anthropic_compat,
             ..
         } = request;
-        let body = serde_json::to_vec(&build_request_body(
+        // The payload snapshot the observer sees is the same value the wire
+        // body serializes, so the two can never drift apart.
+        let payload = serde_json::to_value(build_request_body(
             &model,
             &context,
             &options,
             anthropic_compat,
         ))
         .unwrap_or_default();
+        let body = serde_json::to_vec(&payload).unwrap_or_default();
         let base_url = model.base_url.clone();
+        let model_id = model.id.clone();
         let cost = model.cost.clone();
         let timeout = options.timeout;
         let max_retries = options.max_retries.unwrap_or(http::DEFAULT_MAX_RETRIES);
@@ -89,6 +96,9 @@ impl ProtocolAdapter for AnthropicMessages {
         let stream = async_stream::stream! {
             let base = auth.base_url.as_deref().unwrap_or(&base_url);
             let url = format!("{}/v1/messages", base.trim_end_matches('/'));
+            let observation = observer.map(|observer| {
+                ObservationPlan::new(observer, provider, model_id, &url, &final_headers, payload)
+            });
             let factory = move || {
                 let mut builder =
                     super::apply_headers(http.post(&url).body(body.clone()), &final_headers);
@@ -110,7 +120,7 @@ impl ProtocolAdapter for AnthropicMessages {
             // is a dropped connection, not a completed response.
             let mut saw_message_stop = false;
 
-            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay));
+            let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay, observation));
             'outer: while let Some(exec_event) = exec.next().await {
                 let data = match exec_event {
                     ExecutorEvent::Retry { attempt, max_attempts, delay, kind } => {

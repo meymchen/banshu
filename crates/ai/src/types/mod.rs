@@ -16,6 +16,7 @@ pub use content::{
     AssistantContent, ImageContent, TextContent, ThinkingContent, ToolCall, UserContent,
 };
 pub use context::{Context, ContextSnapshotV1};
+pub(crate) use message::redact_sensitive_text;
 pub use message::{
     AssistantMessage, Diagnostic, DiagnosticCode, Message, StopReason, ToolResultMessage,
     UserMessage,

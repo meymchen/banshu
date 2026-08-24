@@ -48,6 +48,7 @@ use crate::types::{
 /// [`StreamOptions::api_key`] wins over the resolver); a resolution failure
 /// never reaches the adapter — it terminates the stream in-band first.
 pub struct PreparedRequest {
+    provider: String,
     model: Model,
     context: Context,
     options: StreamOptions,
@@ -213,6 +214,7 @@ pub(crate) fn apply_headers(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drive(
     adapter: &Arc<dyn ProtocolAdapter>,
+    provider_id: &str,
     model: &Model,
     context: &Context,
     options: &StreamOptions,
@@ -223,6 +225,7 @@ pub(crate) fn drive(
     anthropic_compat: AnthropicCompat,
 ) -> MessageStream {
     let adapter = adapter.clone();
+    let provider_id = provider_id.to_string();
     let model = model.clone();
     let context = context.clone();
     let mut options = options.clone();
@@ -311,6 +314,7 @@ pub(crate) fn drive(
         };
         let headers = header_layers.merge(&ProviderHeaders::new());
         let prepared = PreparedRequest {
+            provider: provider_id,
             model,
             context,
             options,

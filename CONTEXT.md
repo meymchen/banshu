@@ -87,6 +87,26 @@ than portable: known values retain their existing normalized behavior, while
 an unrecognized value normalizes to `Unknown` without losing the original.
 _Avoid_: finish reason, provider stop code
 
+**Request Observer** (`RequestObserver`, issue #55):
+The read-only diagnostic seam for redacted request visibility, attached per
+request via `StreamOptions::observer`. The built-in dispatch reports every
+attempt exactly once before send (a 1-based attempt number, redacted URL,
+provider, model, and payload snapshot) and every response when its headers
+arrive (status, redacted headers, and the provider request id when present) —
+a retryable failure's response is observed just like the success that follows
+it, while a transport failure that never receives headers observes nothing.
+Everything an observer sees is redacted at construction with the same
+secret/base64 pipeline diagnostics use: the URL loses its query, fragment,
+and userinfo, and sensitive header values (`Authorization`, `x-api-key`,
+cookies, OAuth tokens, and equivalents) become `[REDACTED]`. Observations
+arrive by shared reference, so an observer cannot rewrite the payload or
+headers — mutation stays the job of a custom adapter — and a panicking
+observer is caught, logged with one fixed secret-free warning, and the
+request continues unchanged: no credential exposure, no duplicate sends, no
+authentication changes. A custom protocol adapter owns its dispatch and does
+not report.
+_Avoid_: request hooks, middleware, interceptor
+
 **Context normalization** (issue #39):
 The one pass that resolves every cross-model rule, run in stream dispatch
 before either protocol adapter builds its wire payload. It takes the caller's

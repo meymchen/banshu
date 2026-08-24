@@ -1,17 +1,30 @@
-# Local hooks mirroring the CI "lint" job (`.github/workflows/ci.yml`).
-# Install the git hook with `prek install`, or run manually with `prek run --all-files`.
+# prek (https://github.com/j178/prek) — drop-in replacement for pre-commit.
+# Install the git hook once with `prek install`; run against the whole tree
+# with `prek run --all-files`.
+#
+# These hooks mirror the CI "Rustfmt & Clippy" job (`.github/workflows/ci.yml`)
+# exactly, except they fix instead of only checking: a hook that modifies
+# files fails the commit, but the fixes are already on disk — re-stage
+# (`git add -u`) and retry. Both run at pre-commit, so lint failures surface
+# at commit time, not in CI.
 repos:
   - repo: local
     hooks:
       - id: cargo-fmt
-        name: cargo fmt --all --check
-        entry: cargo fmt --all --check
+        name: cargo fmt
+        # CI: cargo fmt --all --check
+        entry: cargo fmt --all
         language: system
+        files: \.rs$
         pass_filenames: false
         stages: [pre-commit]
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --workspace --all-features --all-targets -- -D warnings
+        # CI: cargo clippy --workspace --all-features --all-targets -- -D warnings
+        # --fix applies machine-applicable lints; --allow-staged/--allow-dirty
+        # are required because the hook runs mid-commit.
+        entry: cargo clippy --fix --allow-dirty --allow-staged --workspace --all-features --all-targets -- -D warnings
         language: system
+        files: \.rs$
         pass_filenames: false
-        stages: [pre-push]
+        stages: [pre-commit]
