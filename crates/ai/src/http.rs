@@ -47,8 +47,10 @@ pub(crate) struct SendFailure {
     /// Status and headers of the error response, when one arrived (any
     /// non-2xx status); `None` for a transport failure, where no response
     /// ever came back. Kept so the request observer can report a response
-    /// whose body was consumed for diagnostics.
-    pub response: Option<ErrorResponseMetadata>,
+    /// whose body was consumed for diagnostics. Boxed: a `HeaderMap` is
+    /// large, and this struct is the `Err` variant of [`send_once`]'s
+    /// `Result` (clippy `result_large_err`).
+    pub response: Option<Box<ErrorResponseMetadata>>,
 }
 
 /// The header-level facts of a non-2xx response, captured before its body is
@@ -71,10 +73,10 @@ pub(crate) async fn send_once(
         Ok(response) => {
             let status = response.status();
             let retry_after = retry_after(response.headers());
-            let metadata = ErrorResponseMetadata {
+            let metadata = Box::new(ErrorResponseMetadata {
                 status: status.as_u16(),
                 headers: response.headers().clone(),
-            };
+            });
             let raw_body = response.text().await.unwrap_or_default();
             let body: String = raw_body.chars().take(MAX_ERROR_BODY_CHARS).collect();
             let parsed = parse_error_body(status.as_u16(), &body);
