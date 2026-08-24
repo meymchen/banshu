@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use banshu_ai::testing::{FauxAttempt, FauxEvent, FauxProvider, FauxScript};
+use banshu_ai::testing::{FauxAttempt, FauxEvent, FauxProvider, FauxScript, FauxStopReason};
 use banshu_ai::{
     AssistantContent, AssistantMessageEvent, CancellationToken, Context, ErrorKind, StopReason,
     StreamOptions, Usage,
@@ -22,7 +22,7 @@ async fn fixed_success_script_produces_repeatable_content_and_usage() {
                 FauxEvent::text("Hello, world!"),
                 FauxEvent::usage(usage.clone()),
             ],
-            StopReason::Stop,
+            FauxStopReason::Stop,
         ),
     );
 
@@ -80,7 +80,7 @@ async fn thinking_signatures_and_tool_calls_are_scriptable_without_protocol_type
                 FauxEvent::thinking("check the weather", Some("opaque-signature"), false),
                 FauxEvent::tool_call("call_1", "weather", r#"{"city":"Paris"}"#),
             ],
-            StopReason::ToolUse,
+            FauxStopReason::ToolUse,
         ),
     );
 
@@ -110,7 +110,7 @@ async fn retryable_setup_failures_run_an_exact_number_of_attempts_before_success
         FauxScript::attempts([
             FauxAttempt::failure(ErrorKind::ServerError, "first", Duration::ZERO),
             FauxAttempt::failure(ErrorKind::Transport, "second", Duration::ZERO),
-            FauxAttempt::success([FauxEvent::text("third time")], StopReason::Stop),
+            FauxAttempt::success([FauxEvent::text("third time")], FauxStopReason::Stop),
         ]),
     );
     let options = StreamOptions {
@@ -143,7 +143,7 @@ async fn retry_budget_exhaustion_stops_at_the_exact_attempt_count() {
         FauxScript::attempts([
             FauxAttempt::failure(ErrorKind::ServerError, "first", Duration::ZERO),
             FauxAttempt::failure(ErrorKind::Overloaded, "second", Duration::ZERO),
-            FauxAttempt::success([FauxEvent::text("unreachable")], StopReason::Stop),
+            FauxAttempt::success([FauxEvent::text("unreachable")], FauxStopReason::Stop),
         ]),
     );
     let options = StreamOptions {
@@ -171,7 +171,7 @@ async fn cancellation_during_a_scripted_delay_terminates_aborted() {
                 FauxEvent::delay(Duration::from_secs(60)),
                 FauxEvent::text("too late"),
             ],
-            StopReason::Stop,
+            FauxStopReason::Stop,
         ),
     );
     let cancellation = CancellationToken::new();

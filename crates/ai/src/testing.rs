@@ -47,6 +47,35 @@ pub enum FauxEvent {
     },
 }
 
+/// A successful terminal reason a faux response may report.
+///
+/// Error and aborted terminations are deliberately absent: errors use
+/// [`FauxScript::in_band_failure`], while aborts come from cancelling the
+/// stream. This keeps faux streams inside the same public contract as real
+/// providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FauxStopReason {
+    /// Natural end of turn.
+    Stop,
+    /// The response reached its output-token limit.
+    Length,
+    /// The response ended to request one or more tool calls.
+    ToolUse,
+    /// The provider supplied an unrecognized successful reason.
+    Unknown,
+}
+
+impl From<FauxStopReason> for StopReason {
+    fn from(reason: FauxStopReason) -> Self {
+        match reason {
+            FauxStopReason::Stop => Self::Stop,
+            FauxStopReason::Length => Self::Length,
+            FauxStopReason::ToolUse => Self::ToolUse,
+            FauxStopReason::Unknown => Self::Unknown,
+        }
+    }
+}
+
 impl FauxEvent {
     /// Script one complete text content block.
     pub fn text(text: impl Into<String>) -> Self {
@@ -121,13 +150,16 @@ enum AttemptOutcome {
 
 #[derive(Debug, Clone)]
 enum ResponseTerminal {
-    Success { stop_reason: StopReason },
+    Success { stop_reason: FauxStopReason },
     Failure { kind: ErrorKind, message: String },
 }
 
 impl FauxAttempt {
     /// Script an attempt that establishes a response and streams `events`.
-    pub fn success(events: impl IntoIterator<Item = FauxEvent>, stop_reason: StopReason) -> Self {
+    pub fn success(
+        events: impl IntoIterator<Item = FauxEvent>,
+        stop_reason: FauxStopReason,
+    ) -> Self {
         Self {
             outcome: AttemptOutcome::Response {
                 events: events.into_iter().collect(),
@@ -181,7 +213,10 @@ impl FauxScript {
     ///
     /// Each invocation starts from the beginning of the script, making the
     /// same fixture safely repeatable across tests.
-    pub fn success(events: impl IntoIterator<Item = FauxEvent>, stop_reason: StopReason) -> Self {
+    pub fn success(
+        events: impl IntoIterator<Item = FauxEvent>,
+        stop_reason: FauxStopReason,
+    ) -> Self {
         Self {
             attempts: vec![FauxAttempt::success(events, stop_reason)],
         }
@@ -286,7 +321,7 @@ impl ProtocolAdapter for FauxAdapter {
                         }
                         match terminal {
                             ResponseTerminal::Success { stop_reason } => {
-                                yield ProtocolEvent::Stop(stop_reason);
+                                yield ProtocolEvent::Stop(stop_reason.into());
                             }
                             ResponseTerminal::Failure { kind, message } => {
                                 yield ProtocolEvent::Failure {

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use banshu_ai::testing::{FauxAttempt, FauxEvent, FauxProvider, FauxScript};
+use banshu_ai::testing::{FauxAttempt, FauxEvent, FauxProvider, FauxScript, FauxStopReason};
 use banshu_ai::{CancellationToken, Context, ErrorKind, StopReason, StreamOptions};
 
 #[tokio::main]
@@ -9,7 +9,7 @@ async fn main() {
 
     let success = FauxProvider::new(
         "test-model",
-        FauxScript::success([FauxEvent::text("hello back")], StopReason::Stop),
+        FauxScript::success([FauxEvent::text("hello back")], FauxStopReason::Stop),
     );
     let message = success
         .stream(&context, &StreamOptions::default())
@@ -37,7 +37,7 @@ async fn main() {
         "test-model",
         FauxScript::success(
             [FauxEvent::delay(Duration::from_secs(60))],
-            StopReason::Stop,
+            FauxStopReason::Stop,
         ),
     );
     let message = delayed
@@ -56,7 +56,7 @@ async fn main() {
         "test-model",
         FauxScript::attempts([
             FauxAttempt::failure(ErrorKind::ServerError, "try again", Duration::ZERO),
-            FauxAttempt::success([FauxEvent::text("recovered")], StopReason::Stop),
+            FauxAttempt::success([FauxEvent::text("recovered")], FauxStopReason::Stop),
         ]),
     );
     let message = retried
