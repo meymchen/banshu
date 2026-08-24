@@ -98,6 +98,16 @@ where
 }
 
 fn sanitize_diagnostic_message(message: &str) -> String {
+    redact_sensitive_text(message)
+        .chars()
+        .take(MAX_DIAGNOSTIC_MESSAGE_CHARS)
+        .collect()
+}
+
+/// The secret/base64 redaction half of [`sanitize_diagnostic_message`], without
+/// its length cap — shared with the request observer, whose payload snapshots
+/// keep their full text.
+pub(crate) fn redact_sensitive_text(message: &str) -> String {
     let labeled_values_redacted = message
         .split('\n')
         .map(redact_sensitive_label_value)
@@ -106,9 +116,6 @@ fn sanitize_diagnostic_message(message: &str) -> String {
     let bearer_values_redacted = redact_bearer_values(&labeled_values_redacted);
     let data_urls_redacted = redact_data_url_payloads(&bearer_values_redacted);
     redact_long_base64_runs(&data_urls_redacted)
-        .chars()
-        .take(MAX_DIAGNOSTIC_MESSAGE_CHARS)
-        .collect()
 }
 
 fn redact_sensitive_label_value(line: &str) -> String {

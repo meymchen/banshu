@@ -36,6 +36,7 @@ mod minimax;
 mod models;
 mod models_store;
 mod oauth;
+mod observer;
 mod options;
 mod overflow;
 mod partial_json;
@@ -60,6 +61,7 @@ pub use oauth::{
     AuthInteraction, AuthInteractionHandler, DEFAULT_LOGIN_TIMEOUT, OAuthFlow, OAuthSession,
     RefreshError, VerificationDetails,
 };
+pub use observer::{BeforeSendObservation, RequestObserver, ResponseObservation};
 pub use options::{CacheRetention, StreamOptions};
 pub use overflow::is_context_overflow;
 pub use provider::{

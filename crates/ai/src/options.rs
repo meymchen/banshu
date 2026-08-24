@@ -1,11 +1,13 @@
 //! Options controlling a single stream request.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::{ProviderHeaders, RedactedHeaders, is_sensitive_header_name};
+use crate::observer::RequestObserver;
 use crate::types::{ReasoningOptions, ToolChoice};
 
 struct RedactedMetadata<'a>(&'a BTreeMap<String, serde_json::Value>);
@@ -142,6 +144,18 @@ pub struct StreamOptions {
     /// preserving whatever content had already streamed; no further retries
     /// are attempted.
     pub cancellation: Option<CancellationToken>,
+    /// A read-only observer notified immediately before each send and when
+    /// response headers arrive. Everything it sees is redacted — URL query,
+    /// credentials, and sensitive header values never reach it — and it
+    /// cannot rewrite the request; see [`RequestObserver`]. A panicking
+    /// observer is caught and logged, never failing or duplicating the
+    /// request it watches.
+    ///
+    /// Observations are reported by the built-in protocol adapters through
+    /// the shared executor; a custom
+    /// [`ProtocolAdapter`](crate::ProtocolAdapter) owns its own dispatch and
+    /// does not report unless it chooses to.
+    pub observer: Option<Arc<dyn RequestObserver>>,
 }
 
 impl std::fmt::Debug for StreamOptions {
@@ -161,6 +175,7 @@ impl std::fmt::Debug for StreamOptions {
             .field("metadata", &RedactedMetadata(&self.metadata))
             .field("max_retry_delay", &self.max_retry_delay)
             .field("cancellation", &self.cancellation)
+            .field("observer", &self.observer.as_ref().map(|_| "Some(..)"))
             .finish()
     }
 }

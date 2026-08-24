@@ -1034,6 +1034,7 @@ impl Provider {
         match self.adapters.get(&model.api) {
             Some(adapter) => crate::api::drive(
                 adapter,
+                &self.id,
                 model,
                 context,
                 options,

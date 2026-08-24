@@ -20,6 +20,7 @@ pub use message::{
     AssistantMessage, Diagnostic, DiagnosticCode, Message, StopReason, ToolResultMessage,
     UserMessage,
 };
+pub(crate) use message::redact_sensitive_text;
 pub use model::{
     ApiKind, CapabilitySupport, CostTier, Modality, Model, ModelCapabilities, ModelCost,
 };

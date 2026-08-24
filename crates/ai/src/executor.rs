@@ -20,6 +20,7 @@ use futures_util::StreamExt;
 
 use crate::error::ErrorKind;
 use crate::http::{self, RetryDecision};
+use crate::observer::ObservationPlan;
 use crate::sse::{SseDecoder, SseError, SseEvent};
 use crate::types::{Diagnostic, DiagnosticCode};
 
@@ -62,53 +63,82 @@ pub(crate) enum ExecutorEvent {
 ///
 /// `factory` rebuilds the request from scratch for every attempt (headers,
 /// body, timeout — everything), rather than `RequestBuilder::try_clone`.
+///
+/// When `observation` carries a request observer, every attempt is reported
+/// to it exactly once before send (1-based, so the initial request is attempt
+/// 1), and every response — whatever its status — is reported when its
+/// headers arrive. Observer panics are contained by the plan; they never
+/// change what is sent or how the loop proceeds.
 pub(crate) fn execute(
     factory: impl Fn() -> reqwest::RequestBuilder + Send + 'static,
     max_retries: u32,
     max_retry_delay: Option<Duration>,
+    observation: Option<ObservationPlan>,
 ) -> impl Stream<Item = ExecutorEvent> {
     async_stream::stream! {
         let max_retry_delay = max_retry_delay.unwrap_or(http::DEFAULT_MAX_RETRY_DELAY);
         let mut attempt: u32 = 0;
         let response = loop {
+            if let Some(plan) = &observation {
+                plan.before_send(attempt + 1);
+            }
             match http::send_once(factory()).await {
-                Ok(response) => break response,
-                Err(failure) if failure.kind.is_retryable() && attempt < max_retries => {
-                    attempt += 1;
-                    match http::retry_delay(attempt, failure.retry_after, max_retry_delay) {
-                        RetryDecision::Sleep(delay) => {
-                            yield ExecutorEvent::Retry {
-                                attempt,
-                                max_attempts: max_retries + 1,
-                                delay,
-                                kind: failure.kind,
-                            };
-                            tokio::time::sleep(delay).await;
-                        }
-                        RetryDecision::ExceedsCap { requested } => {
-                            yield ExecutorEvent::Failed {
-                                kind: ErrorKind::RateLimited,
-                                message: format!(
-                                    "provider requested a {:.0}s retry delay, exceeding the {:.0}s cap",
-                                    requested.as_secs_f64(),
-                                    max_retry_delay.as_secs_f64(),
-                                ),
-                                diagnostics: vec![Diagnostic::new(
-                                    DiagnosticCode::ProviderError,
-                                    format!("Retry-After requested {:.0}s", requested.as_secs_f64()),
-                                )],
-                            };
-                            return;
-                        }
+                Ok(response) => {
+                    if let Some(plan) = &observation {
+                        plan.on_response(
+                            attempt + 1,
+                            response.status().as_u16(),
+                            response.headers(),
+                            extract_request_id(response.headers()),
+                        );
                     }
+                    break response;
                 }
                 Err(failure) => {
-                    yield ExecutorEvent::Failed {
-                        kind: failure.kind,
-                        message: failure.detail,
-                        diagnostics: failure.diagnostics,
-                    };
-                    return;
+                    if let (Some(plan), Some(metadata)) = (&observation, &failure.response) {
+                        plan.on_response(
+                            attempt + 1,
+                            metadata.status,
+                            &metadata.headers,
+                            extract_request_id(&metadata.headers),
+                        );
+                    }
+                    if failure.kind.is_retryable() && attempt < max_retries {
+                        attempt += 1;
+                        match http::retry_delay(attempt, failure.retry_after, max_retry_delay) {
+                            RetryDecision::Sleep(delay) => {
+                                yield ExecutorEvent::Retry {
+                                    attempt,
+                                    max_attempts: max_retries + 1,
+                                    delay,
+                                    kind: failure.kind,
+                                };
+                                tokio::time::sleep(delay).await;
+                            }
+                            RetryDecision::ExceedsCap { requested } => {
+                                yield ExecutorEvent::Failed {
+                                    kind: ErrorKind::RateLimited,
+                                    message: format!(
+                                        "provider requested a {:.0}s retry delay, exceeding the {:.0}s cap",
+                                        requested.as_secs_f64(),
+                                        max_retry_delay.as_secs_f64(),
+                                    ),
+                                    diagnostics: vec![Diagnostic::new(
+                                        DiagnosticCode::ProviderError,
+                                        format!("Retry-After requested {:.0}s", requested.as_secs_f64()),
+                                    )],
+                                };
+                                return;
+                            }
+                        }
+                    } else {
+                        yield ExecutorEvent::Failed {
+                            kind: failure.kind,
+                            message: failure.detail,
+                            diagnostics: failure.diagnostics,
+                        };
+                        return;
+                    }
                 }
             }
         };
