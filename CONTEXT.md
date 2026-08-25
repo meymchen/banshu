@@ -158,6 +158,19 @@ the response contains tool calls and `Stop` otherwise, with no Raw Stop
 Reason.
 _Avoid_: EOF inference, silent completion
 
+**Tool-history wire policies** (`OpenAiCompat::tool_result_names`,
+`OpenAiCompat::empty_assistant_separator`, issue #91):
+The tool-history message shapes an OpenAI-compatible provider declares its
+chat template requires: whether each replayed `tool` message carries the
+tool's `name` alongside its `tool_call_id`, and whether an empty assistant
+message (`{ "role": "assistant", "content": "" }`) separates a run of tool
+results from a following user message. The separator fires only at a tool-run
+→ user boundary — never between consecutive tool results, never twice in a
+row, and ahead of the image-carrier user message that trails a run holding
+images, which is such a boundary. The undeclared default sends neither,
+byte-compatible with the request bodies bundled providers have always sent.
+_Avoid_: tool message quirks, chat-template fixes
+
 **Context Overflow** (`ErrorKind::ContextOverflow`, `is_context_overflow`,
 issue #53):
 One classification over every provider signal that a request exceeded the

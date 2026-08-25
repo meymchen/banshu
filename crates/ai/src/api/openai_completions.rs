@@ -542,6 +542,23 @@ fn image_url_block(image: &crate::types::ImageContent) -> serde_json::Value {
     })
 }
 
+/// Insert the declared empty-assistant separator when a user message is about
+/// to follow a run of tool results. Only a trailing `tool` message triggers
+/// it, so the separator never lands between consecutive tool results and never
+/// twice in a row — a following user message (of any origin, including the
+/// image carrier `push_tool_results` appends) finds the run already closed.
+fn push_separator_if_declared(messages: &mut Vec<serde_json::Value>, compat: OpenAiCompat) {
+    if compat.empty_assistant_separator
+        && messages
+            .last()
+            .and_then(|message| message.get("role"))
+            .and_then(serde_json::Value::as_str)
+            == Some("tool")
+    {
+        messages.push(serde_json::json!({ "role": "assistant", "content": "" }));
+    }
+}
+
 /// Serialize the run of consecutive tool results starting at `start`: one
 /// `tool` message each, text-only (an image-only result reads
 /// `(see attached image)`), then a single trailing `user` message carrying
@@ -554,6 +571,7 @@ fn push_tool_results(
     messages: &mut Vec<serde_json::Value>,
     context_messages: &[Message],
     start: usize,
+    compat: OpenAiCompat,
 ) -> usize {
     use serde_json::json;
 
@@ -566,11 +584,17 @@ fn push_tool_results(
         } else {
             text
         };
-        messages.push(json!({
+        let mut wire = json!({
             "role": "tool",
             "tool_call_id": result.tool_call_id,
             "content": content,
-        }));
+        });
+        // The name rides along only when declared; undeclared, the message
+        // keeps the exact shape it has always had.
+        if compat.tool_result_names {
+            wire["name"] = json!(result.tool_name);
+        }
+        messages.push(wire);
         for block in &result.content {
             if let UserContent::Image(image) = block {
                 images.push(image_url_block(image));
@@ -579,6 +603,7 @@ fn push_tool_results(
         index += 1;
     }
     if !images.is_empty() {
+        push_separator_if_declared(messages, compat);
         let mut content =
             vec![json!({ "type": "text", "text": "Attached image(s) from tool result:" })];
         content.extend(images);
@@ -603,6 +628,7 @@ fn build_request_body(
     while index < context.messages.len() {
         match &context.messages[index] {
             Message::User(user) => {
+                push_separator_if_declared(&mut messages, compat);
                 messages.push(json!({ "role": "user", "content": user_content_wire(user) }));
                 index += 1;
             }
@@ -666,7 +692,7 @@ fn build_request_body(
                 index += 1;
             }
             Message::ToolResult(_) => {
-                index = push_tool_results(&mut messages, &context.messages, index);
+                index = push_tool_results(&mut messages, &context.messages, index, compat);
             }
         }
     }

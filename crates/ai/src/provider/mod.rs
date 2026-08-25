@@ -409,12 +409,25 @@ pub struct OpenAiCompat {
     /// What a bare end of stream means. See [`OpenAiStreamTermination`]; the
     /// default requires a formal wire terminator.
     pub stream_termination: OpenAiStreamTermination,
+    /// Whether each replayed `tool` message carries the tool's `name`
+    /// alongside its `tool_call_id`. Some chat templates key tool results by
+    /// name; the default omits the field, matching the request bodies bundled
+    /// providers have always sent.
+    pub tool_result_names: bool,
+    /// Whether an empty assistant message separates a run of tool results from
+    /// a following user message, sent as `{ "role": "assistant", "content": "" }`.
+    /// Some chat templates require strict user/assistant alternation around a
+    /// tool run. The separator is inserted only at a tool-run → user boundary
+    /// — never between consecutive tool results, and never twice in a row. The
+    /// default inserts nothing, matching the request bodies bundled providers
+    /// have always sent.
+    pub empty_assistant_separator: bool,
 }
 
 impl Default for OpenAiCompat {
-    /// The undeclared envelope: streamed usage is requested and `max_tokens`
-    /// carries the Output Budget — the request shape bundled providers have
-    /// always sent.
+    /// The undeclared envelope: streamed usage is requested, `max_tokens`
+    /// carries the Output Budget, and tool history goes out without names or a
+    /// separator — the request shape bundled providers have always sent.
     fn default() -> Self {
         Self {
             prompt_caching: OpenAiPromptCaching::default(),
@@ -426,6 +439,8 @@ impl Default for OpenAiCompat {
             streamed_usage: true,
             output_token_field: OpenAiOutputTokenField::default(),
             stream_termination: OpenAiStreamTermination::default(),
+            tool_result_names: false,
+            empty_assistant_separator: false,
         }
     }
 }
