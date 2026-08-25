@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/meymchen/banshu/compare/v0.8.0...v0.9.0) - 2026-08-25
+
+### Added
+
+- *(ai)* [**breaking**] freeze the 1.0 public API ([#86](https://github.com/meymchen/banshu/pull/86))
+- *(ai)* add deterministic faux provider ([#84](https://github.com/meymchen/banshu/pull/84))
+- *(ai)* add redacted request observers ([#55](https://github.com/meymchen/banshu/pull/55)) ([#83](https://github.com/meymchen/banshu/pull/83))
+- *(ai)* preserve raw stop reasons across protocols ([#54](https://github.com/meymchen/banshu/pull/54))
+
+### Other
+
+- *(ai)* harden protocol boundaries with properties ([#57](https://github.com/meymchen/banshu/pull/57)) ([#85](https://github.com/meymchen/banshu/pull/85))
+- *(ai)* stabilize cancellation coverage ([#80](https://github.com/meymchen/banshu/pull/80))
+
 ### Changed
 
 - **Breaking:** configure request caching and reasoning through
