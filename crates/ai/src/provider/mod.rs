@@ -290,8 +290,25 @@ impl ToolChoiceSupport {
     }
 }
 
-/// Endpoint quirks declared by an OpenAI-compatible provider.
+/// The standard output-token field that carries a request's resolved Output
+/// Budget on an OpenAI-compatible endpoint.
+///
+/// Every provider states its own — nothing is inferred from a base URL or a
+/// model id. The policy is closed over the two standard fields: exactly the
+/// selected one carries the budget, and the other is absent from the payload.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenAiOutputTokenField {
+    /// `max_tokens` — the long-standing chat-completions field. The default,
+    /// matching the request bodies bundled providers have always sent.
+    #[default]
+    MaxTokens,
+    /// `max_completion_tokens` — the field OpenAI's own newer models take in
+    /// place of `max_tokens`.
+    MaxCompletionTokens,
+}
+
+/// Endpoint quirks declared by an OpenAI-compatible provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenAiCompat {
     /// Request-side prompt-cache controls.
     pub prompt_caching: OpenAiPromptCaching,
@@ -341,6 +358,37 @@ pub struct OpenAiCompat {
     ///   endpoint with no reasoning request field at all: those models may
     ///   still stream thinking, but no effort can be *asked* of them.
     pub reasoning_efforts: Option<&'static [ReasoningEffort]>,
+    /// Whether the endpoint accepts `stream_options: { "include_usage": true }`,
+    /// the request for usage to arrive as a streamed chunk.
+    ///
+    /// The default is `true`, keeping the undeclared path byte-compatible with
+    /// the request bodies bundled providers have always sent. Declare `false`
+    /// for an endpoint that rejects or ignores `stream_options`: the adapter
+    /// then omits the field entirely rather than sending an envelope the
+    /// endpoint does not accept. Usage reported anyway — as a final streamed
+    /// chunk — is still parsed either way.
+    pub streamed_usage: bool,
+    /// Which standard output-token field carries the resolved Output Budget.
+    /// Exactly the selected field is sent; the other is absent.
+    pub output_token_field: OpenAiOutputTokenField,
+}
+
+impl Default for OpenAiCompat {
+    /// The undeclared envelope: streamed usage is requested and `max_tokens`
+    /// carries the Output Budget — the request shape bundled providers have
+    /// always sent.
+    fn default() -> Self {
+        Self {
+            prompt_caching: OpenAiPromptCaching::default(),
+            requires_reasoning_content_on_assistant_messages: false,
+            reasoning_format: OpenAiReasoningFormat::default(),
+            tool_choice: ToolChoiceSupport::default(),
+            strict_tool_schemas: false,
+            reasoning_efforts: None,
+            streamed_usage: true,
+            output_token_field: OpenAiOutputTokenField::default(),
+        }
+    }
 }
 
 /// Endpoint quirks declared by an Anthropic-compatible provider.

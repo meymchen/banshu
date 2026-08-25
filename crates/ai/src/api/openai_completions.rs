@@ -15,7 +15,9 @@ use crate::CacheRetention;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::observer::ObservationPlan;
-use crate::provider::{OpenAiCompat, OpenAiPromptCaching, OpenAiReasoningFormat};
+use crate::provider::{
+    OpenAiCompat, OpenAiOutputTokenField, OpenAiPromptCaching, OpenAiReasoningFormat,
+};
 use crate::types::{
     ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model,
     ReasoningEffort, ReasoningOptions, StopReason, ThinkingContent, ToolChoice, Usage, UserContent,
@@ -645,16 +647,26 @@ fn build_request_body(
 
     let reasoning = reasoning_wire(compat.reasoning_format, options.reasoning.as_ref());
 
+    // The resolved Output Budget ships on exactly the field the provider
+    // declared; the other standard field stays absent.
+    let (max_tokens, max_completion_tokens) = match compat.output_token_field {
+        OpenAiOutputTokenField::MaxTokens => (options.max_tokens, None),
+        OpenAiOutputTokenField::MaxCompletionTokens => (None, options.max_tokens),
+    };
+
     ChatRequest {
         model: model.id.clone(),
         messages,
         tools,
         stream: true,
-        stream_options: StreamOpts {
+        // Streamed usage is requested only when the endpoint declares it; an
+        // endpoint without it gets no `stream_options` field at all.
+        stream_options: compat.streamed_usage.then_some(StreamOpts {
             include_usage: true,
-        },
+        }),
         temperature: options.temperature,
-        max_tokens: options.max_tokens,
+        max_tokens,
+        max_completion_tokens,
         prompt_cache_key: openai_cache
             .then(|| {
                 options
@@ -698,11 +710,18 @@ struct ChatRequest {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<WireTool>,
     stream: bool,
-    stream_options: StreamOpts,
+    /// Absent entirely when the endpoint declares no streamed-usage support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOpts>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// The resolved Output Budget when `max_tokens` is the declared field.
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    /// The resolved Output Budget when `max_completion_tokens` is the
+    /// declared field; never sent alongside `max_tokens`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
