@@ -489,6 +489,22 @@ impl Provider {
         self
     }
 
+    /// Replace the HTTP client every provider-owned request goes through —
+    /// inference, Catalog Refresh, Probe, and the
+    /// [`PreparedRequest`](crate::PreparedRequest) handed to adapters — with
+    /// an application-owned one carrying the application's proxy,
+    /// certificate, DNS, connection-pool, and default-header policy.
+    ///
+    /// An OAuth session created by a vendor constructor
+    /// ([`minimax`](Self::minimax), [`kimi`](Self::kimi)) captured the
+    /// previous client at construction and is not retargeted; to give the
+    /// credential lifecycle the same client, construct it through
+    /// [`OAuthSession::new`](crate::OAuthSession::new) yourself.
+    pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
+        self.http = client;
+        self
+    }
+
     /// OpenAI — Chat Completions with explicit prompt-cache routing support.
     ///
     /// Reasoning: top-level `reasoning_effort`. Tool choice: all four choices,
