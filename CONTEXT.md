@@ -129,6 +129,20 @@ budget is preserved exactly or refused when it cannot fit remaining context,
 and zero-valued model limits stay unknown.
 _Avoid_: completion allowance, output clamp
 
+**Request Envelope** (`OpenAiCompat::streamed_usage`,
+`OpenAiCompat::output_token_field`, `OpenAiOutputTokenField`, issue #89):
+The request shape an OpenAI-compatible provider declares its endpoint accepts
+for the two cross-cutting envelope fields: whether streamed usage may be
+requested (`stream_options: { "include_usage": true }` goes out only when
+declared; an endpoint without the declaration gets no `stream_options` field
+at all, and usage it reports anyway is still parsed) and which standard
+output-token field carries the resolved Output Budget (a closed policy over
+`max_tokens` and `max_completion_tokens` — exactly the selected field is sent,
+the other is absent). The undeclared default requests streamed usage and caps
+with `max_tokens`, byte-compatible with the request bodies bundled providers
+have always sent.
+_Avoid_: wire envelope, request framing
+
 **Context Overflow** (`ErrorKind::ContextOverflow`, `is_context_overflow`,
 issue #53):
 One classification over every provider signal that a request exceeded the

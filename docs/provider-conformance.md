@@ -36,6 +36,11 @@ Every fixed promise above is exercised without live credentials:
 - OpenAI/DeepSeek/Moonshot and Anthropic cache request/usage shapes:
   `crates/ai/tests/openai_prompt_caching.rs` and
   `crates/ai/tests/anthropic_prompt_caching.rs`.
+- OpenAI-compatible request envelopes (streamed-usage request and the
+  output-token field carrying the Output Budget — every bundled provider
+  keeps the default: usage requested, `max_tokens`):
+  `crates/ai/tests/provider_conformance.rs` and
+  `crates/ai/tests/openai_request_envelope.rs`.
 
 Tool calling and image input themselves are explicitly model dependent. Their
 catalog attestations are covered by `crates/ai/tests/model_capabilities.rs`;

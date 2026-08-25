@@ -7,8 +7,9 @@
 use std::sync::{Arc, Mutex};
 
 use banshu_ai::{
-    AnthropicReasoningFormat, ApiKind, InMemoryCredentialStore, MiniMaxRegion, OpenAiPromptCaching,
-    OpenAiReasoningFormat, Provider, ReasoningEffort, ToolChoice, ToolChoiceSupport,
+    AnthropicReasoningFormat, ApiKind, InMemoryCredentialStore, MiniMaxRegion,
+    OpenAiOutputTokenField, OpenAiPromptCaching, OpenAiReasoningFormat, Provider, ReasoningEffort,
+    ToolChoice, ToolChoiceSupport,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -166,6 +167,15 @@ fn bundled_providers_match_the_frozen_matrix() {
         assert_eq!(provider.base_url(), expected.base_url);
         assert_eq!(provider.api_kind(), expected.api);
         assert_eq!(openai.prompt_caching, OpenAiPromptCaching::Automatic);
+        // Every bundled provider keeps the default request envelope: streamed
+        // usage is requested and `max_tokens` carries the Output Budget.
+        assert!(openai.streamed_usage, "{}: streamed usage", expected.id);
+        assert_eq!(
+            openai.output_token_field,
+            OpenAiOutputTokenField::MaxTokens,
+            "{}: output token field",
+            expected.id,
+        );
         assert_eq!(openai.reasoning_format, expected.openai_reasoning);
         assert_eq!(anthropic.reasoning_format, expected.anthropic_reasoning);
         let (actual_efforts, actual_tool_choice, actual_strict) = match expected.api {
