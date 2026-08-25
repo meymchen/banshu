@@ -1,11 +1,16 @@
 //! Prompt caching for OpenAI-compatible providers.
 //!
-//! Covers request-side controls and the usage variants returned by OpenAI,
-//! DeepSeek, OpenRouter-style endpoints, and Moonshot.
+//! Covers request-side cache-routing policies (issue #92) and the usage
+//! variants returned by OpenAI, DeepSeek, OpenRouter-style endpoints, and
+//! Moonshot.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use banshu_ai::{
-    CacheRetention, Context, Model, ModelCost, OpenAiCompat, OpenAiPromptCaching, Provider,
-    StreamOptions,
+    BeforeSendObservation, CacheRetention, Context, ErrorKind, Model, ModelCost,
+    OpenAiCacheRetention, OpenAiCompat, OpenAiSessionAffinity, Provider, ProviderHeaders,
+    RequestObserver, StreamOptions,
 };
 use serde_json::Value;
 use wiremock::matchers::{method, path};
@@ -145,111 +150,385 @@ async fn reads_moonshot_usage_from_the_choice() {
     assert_eq!(message.usage.total_tokens, 12);
 }
 
-#[tokio::test]
-async fn sends_openai_cache_key_and_long_retention_when_declared() {
-    let server = MockServer::start().await;
-    mount_sse(
-        &server,
-        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
-    )
-    .await;
+const DONE_SSE: &str =
+    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 
-    let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"])
-        .with_openai_compat(OpenAiCompat {
-            prompt_caching: OpenAiPromptCaching::OpenAi,
-            ..OpenAiCompat::default()
-        });
-    let long_session_id = "x".repeat(80);
-    let options = StreamOptions {
-        cache_retention: Some(CacheRetention::Long),
-        session_id: Some(long_session_id),
-        ..options()
-    };
+/// The header trio the `SessionAffinityHeaders` shape sends.
+const AFFINITY_HEADERS: [&str; 3] = ["session_id", "x-client-request-id", "x-session-affinity"];
+
+fn provider(server: &MockServer, compat: OpenAiCompat) -> Provider {
+    Provider::openai_compatible("custom", "Custom", server.uri(), ["X"]).with_openai_compat(compat)
+}
+
+/// Stream one request and return exactly what the server recorded.
+async fn sent_request(
+    server: &MockServer,
+    provider: &Provider,
+    options: &StreamOptions,
+) -> wiremock::Request {
     provider
-        .stream(&model(&server), &Context::new().user("hi"), &options)
+        .stream(&model(server), &Context::new().user("hi"), options)
         .finish()
         .await;
-
     let requests = server.received_requests().await.expect("request journal");
-    let body: Value = serde_json::from_slice(&requests[0].body).expect("JSON request");
-    assert_eq!(body["prompt_cache_key"], "x".repeat(64));
-    assert_eq!(body["prompt_cache_retention"], "24h");
+    assert_eq!(requests.len(), 1, "exactly one request should be sent");
+    requests.into_iter().next().unwrap()
+}
+
+fn sent_body(request: &wiremock::Request) -> Value {
+    serde_json::from_slice(&request.body).expect("JSON request")
+}
+
+fn header(request: &wiremock::Request, name: &str) -> String {
+    request
+        .headers
+        .get(name)
+        .unwrap_or_else(|| panic!("{name} should be sent"))
+        .to_str()
+        .expect("ASCII header value")
+        .to_string()
 }
 
 #[tokio::test]
-async fn generic_or_disabled_providers_send_no_openai_cache_extensions() {
-    for (caching, retention) in [
-        (OpenAiPromptCaching::Automatic, CacheRetention::Long),
-        (OpenAiPromptCaching::OpenAi, CacheRetention::Disabled),
-    ] {
-        let server = MockServer::start().await;
-        mount_sse(
-            &server,
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
-        )
-        .await;
+async fn prompt_cache_key_affinity_routes_the_session_id() {
+    let server = MockServer::start().await;
+    mount_sse(&server, DONE_SSE).await;
 
-        let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"])
-            .with_openai_compat(OpenAiCompat {
-                prompt_caching: caching,
-                ..OpenAiCompat::default()
-            });
-        let options = StreamOptions {
-            cache_retention: Some(retention),
-            session_id: Some("conversation-42".into()),
-            ..options()
-        };
-        provider
-            .stream(&model(&server), &Context::new().user("hi"), &options)
-            .finish()
-            .await;
+    let provider = provider(
+        &server,
+        OpenAiCompat {
+            session_affinity: OpenAiSessionAffinity::PromptCacheKey,
+            ..OpenAiCompat::default()
+        },
+    );
+    let options = StreamOptions {
+        cache_retention: Some(CacheRetention::Short),
+        session_id: Some("x".repeat(80)),
+        ..options()
+    };
+    let request = sent_request(&server, &provider, &options).await;
 
-        let requests = server.received_requests().await.expect("request journal");
-        let body: Value = serde_json::from_slice(&requests[0].body).expect("JSON request");
-        assert!(body.get("prompt_cache_key").is_none());
-        assert!(body.get("prompt_cache_retention").is_none());
+    let body = sent_body(&request);
+    assert_eq!(
+        body["prompt_cache_key"],
+        "x".repeat(64),
+        "the key is clamped to the field's limit: {body}"
+    );
+    assert!(
+        body.get("prompt_cache_retention").is_none(),
+        "short retention sends no retention field: {body}"
+    );
+    for name in AFFINITY_HEADERS {
+        assert!(
+            request.headers.get(name).is_none(),
+            "{name} belongs to a different affinity shape"
+        );
     }
 }
 
 #[tokio::test]
-async fn sends_session_affinity_headers_only_when_enabled() {
+async fn header_affinity_routes_the_session_id_verbatim() {
     let server = MockServer::start().await;
-    mount_sse(
-        &server,
-        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
-    )
-    .await;
+    mount_sse(&server, DONE_SSE).await;
 
-    let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"])
-        .with_openai_compat(OpenAiCompat {
-            prompt_caching: OpenAiPromptCaching::SessionAffinityHeaders,
+    let provider = provider(
+        &server,
+        OpenAiCompat {
+            session_affinity: OpenAiSessionAffinity::SessionAffinityHeaders,
             ..OpenAiCompat::default()
-        });
+        },
+    );
     let options = StreamOptions {
+        cache_retention: Some(CacheRetention::Short),
         session_id: Some("conversation-42".into()),
         ..options()
     };
-    provider
-        .stream(&model(&server), &Context::new().user("hi"), &options)
-        .finish()
-        .await;
+    let request = sent_request(&server, &provider, &options).await;
 
-    let requests = server.received_requests().await.expect("request journal");
-    let headers = &requests[0].headers;
+    for name in AFFINITY_HEADERS {
+        assert_eq!(header(&request, name), "conversation-42");
+    }
+    let body = sent_body(&request);
+    assert!(
+        body.get("prompt_cache_key").is_none(),
+        "header affinity sends no body field: {body}"
+    );
+}
+
+#[tokio::test]
+async fn an_undeclared_affinity_sends_no_routing_field_or_headers() {
+    let server = MockServer::start().await;
+    mount_sse(&server, DONE_SSE).await;
+
+    let provider = provider(&server, OpenAiCompat::default());
+    let options = StreamOptions {
+        cache_retention: Some(CacheRetention::Short),
+        session_id: Some("conversation-42".into()),
+        ..options()
+    };
+    let request = sent_request(&server, &provider, &options).await;
+
+    let body = sent_body(&request);
+    assert!(body.get("prompt_cache_key").is_none(), "{body}");
+    assert!(body.get("prompt_cache_retention").is_none(), "{body}");
+    for name in AFFINITY_HEADERS {
+        assert!(
+            request.headers.get(name).is_none(),
+            "an unconfigured endpoint attests nothing, but {name} was sent"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_attesting_provider_emits_long_retention() {
+    let server = MockServer::start().await;
+    mount_sse(&server, DONE_SSE).await;
+
+    let provider = provider(
+        &server,
+        OpenAiCompat {
+            session_affinity: OpenAiSessionAffinity::PromptCacheKey,
+            cache_retention: OpenAiCacheRetention::Long,
+            ..OpenAiCompat::default()
+        },
+    );
+    let options = StreamOptions {
+        cache_retention: Some(CacheRetention::Long),
+        session_id: Some("x".repeat(80)),
+        ..options()
+    };
+    let request = sent_request(&server, &provider, &options).await;
+
+    let body = sent_body(&request);
+    assert_eq!(body["prompt_cache_key"], "x".repeat(64), "{body}");
+    assert_eq!(body["prompt_cache_retention"], "24h", "{body}");
+}
+
+#[tokio::test]
+async fn short_retention_sends_no_retention_field_even_when_long_is_attested() {
+    let server = MockServer::start().await;
+    mount_sse(&server, DONE_SSE).await;
+
+    let provider = provider(
+        &server,
+        OpenAiCompat {
+            session_affinity: OpenAiSessionAffinity::PromptCacheKey,
+            cache_retention: OpenAiCacheRetention::Long,
+            ..OpenAiCompat::default()
+        },
+    );
+    let options = StreamOptions {
+        cache_retention: Some(CacheRetention::Short),
+        session_id: Some("conversation-42".into()),
+        ..options()
+    };
+    let request = sent_request(&server, &provider, &options).await;
+
+    let body = sent_body(&request);
     assert_eq!(
-        headers.get("session_id").unwrap().to_str().unwrap(),
-        "conversation-42"
+        body["prompt_cache_key"], "conversation-42",
+        "short retention keeps the endpoint's normal cache behavior: {body}"
+    );
+    assert!(body.get("prompt_cache_retention").is_none(), "{body}");
+}
+
+#[tokio::test]
+async fn disabled_caching_sends_no_cache_fields_or_affinity_headers() {
+    for affinity in [
+        OpenAiSessionAffinity::PromptCacheKey,
+        OpenAiSessionAffinity::SessionAffinityHeaders,
+    ] {
+        let server = MockServer::start().await;
+        mount_sse(&server, DONE_SSE).await;
+
+        let provider = provider(
+            &server,
+            OpenAiCompat {
+                session_affinity: affinity,
+                cache_retention: OpenAiCacheRetention::Long,
+                ..OpenAiCompat::default()
+            },
+        );
+        let options = StreamOptions {
+            cache_retention: Some(CacheRetention::Disabled),
+            session_id: Some("conversation-42".into()),
+            ..options()
+        };
+        let request = sent_request(&server, &provider, &options).await;
+
+        let body = sent_body(&request);
+        assert!(
+            body.get("prompt_cache_key").is_none(),
+            "{affinity:?}: {body}"
+        );
+        assert!(
+            body.get("prompt_cache_retention").is_none(),
+            "{affinity:?}: {body}"
+        );
+        for name in AFFINITY_HEADERS {
+            assert!(
+                request.headers.get(name).is_none(),
+                "{affinity:?}: disabled caching suppresses {name}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_unsupported_long_retention_is_refused_before_any_request() {
+    for compat in [
+        // Nothing declared at all.
+        OpenAiCompat::default(),
+        // Affinity routing declared, but no long-retention attestation.
+        OpenAiCompat {
+            session_affinity: OpenAiSessionAffinity::PromptCacheKey,
+            ..OpenAiCompat::default()
+        },
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(DONE_SSE),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = provider(&server, compat);
+        let options = StreamOptions {
+            cache_retention: Some(CacheRetention::Long),
+            session_id: Some("conversation-42".into()),
+            ..options()
+        };
+        let message = provider
+            .stream(&model(&server), &Context::new().user("hi"), &options)
+            .finish()
+            .await;
+
+        assert_eq!(
+            message.error_kind,
+            Some(ErrorKind::InvalidRequest),
+            "{compat:?} should refuse an explicit Long in-band"
+        );
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "{compat:?} must be refused before any HTTP request"
+        );
+    }
+}
+
+#[tokio::test]
+async fn session_affinity_never_touches_credential_headers() {
+    let server = MockServer::start().await;
+    mount_sse(&server, DONE_SSE).await;
+
+    let provider = provider(
+        &server,
+        OpenAiCompat {
+            session_affinity: OpenAiSessionAffinity::SessionAffinityHeaders,
+            ..OpenAiCompat::default()
+        },
+    );
+    let options = StreamOptions {
+        session_id: Some("conversation-42".into()),
+        headers: ProviderHeaders::from([(
+            "x-api-key".to_string(),
+            Some("request-layer-secret".to_string()),
+        )]),
+        ..options()
+    };
+    let request = sent_request(&server, &provider, &options).await;
+
+    assert_eq!(
+        header(&request, "authorization"),
+        "Bearer test-key",
+        "the generated credential header arrives exactly as auth produced it"
     );
     assert_eq!(
-        headers
-            .get("x-client-request-id")
+        header(&request, "x-api-key"),
+        "request-layer-secret",
+        "a request-layer credential header is never rewritten either"
+    );
+    for name in AFFINITY_HEADERS {
+        assert_eq!(header(&request, name), "conversation-42");
+    }
+}
+
+/// Records the redacted headers and payload of every before-send observation.
+#[derive(Default)]
+struct WireObserver {
+    before_sends: Mutex<Vec<(BTreeMap<String, String>, Value)>>,
+}
+
+impl RequestObserver for WireObserver {
+    fn before_send(&self, observation: &BeforeSendObservation) {
+        self.before_sends
+            .lock()
             .unwrap()
-            .to_str()
-            .unwrap(),
-        "conversation-42"
+            .push((observation.headers.clone(), observation.payload.clone()));
+    }
+}
+
+#[tokio::test]
+async fn the_observed_payload_and_headers_match_what_the_server_received() {
+    let server = MockServer::start().await;
+    mount_sse(&server, DONE_SSE).await;
+
+    // Long retention is declared independently of the affinity shape, so this
+    // request also exercises the retention field without a cache key.
+    let provider = provider(
+        &server,
+        OpenAiCompat {
+            session_affinity: OpenAiSessionAffinity::SessionAffinityHeaders,
+            cache_retention: OpenAiCacheRetention::Long,
+            ..OpenAiCompat::default()
+        },
     );
+    let observer = Arc::new(WireObserver::default());
+    let options = StreamOptions {
+        cache_retention: Some(CacheRetention::Long),
+        session_id: Some("conversation-42".into()),
+        headers: ProviderHeaders::from([("x-trace-id".to_string(), Some("trace-42".to_string()))]),
+        observer: Some(observer.clone()),
+        ..options()
+    };
+    let request = sent_request(&server, &provider, &options).await;
+
+    let body = sent_body(&request);
+    assert_eq!(body["prompt_cache_retention"], "24h", "{body}");
+
+    let before_sends = observer.before_sends.lock().unwrap();
+    let [(headers, payload)] = before_sends.as_slice() else {
+        panic!("expected exactly one before-send observation");
+    };
     assert_eq!(
-        headers.get("x-session-affinity").unwrap().to_str().unwrap(),
-        "conversation-42"
+        *payload, body,
+        "the observer sees the exact body the server recorded"
     );
+    for name in AFFINITY_HEADERS {
+        assert_eq!(
+            headers.get(name).map(String::as_str),
+            Some(header(&request, name).as_str()),
+            "the observer sees the {name} the server received"
+        );
+    }
+    for name in ["Content-Type", "x-trace-id"] {
+        assert_eq!(
+            headers.get(name).map(String::as_str),
+            Some(header(&request, name).as_str()),
+            "the observer's {name} matches the server's"
+        );
+    }
+    assert_eq!(
+        headers.get("Authorization").map(String::as_str),
+        Some("[REDACTED]"),
+        "the credential reaches the server but never the observer"
+    );
+    assert_eq!(header(&request, "authorization"), "Bearer test-key");
 }

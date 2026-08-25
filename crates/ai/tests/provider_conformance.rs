@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use banshu_ai::{
     AnthropicReasoningFormat, ApiKind, InMemoryCredentialStore, MiniMaxRegion,
-    OpenAiOutputTokenField, OpenAiPromptCaching, OpenAiReasoningFormat, OpenAiStreamTermination,
-    Provider, ReasoningEffort, ToolChoice, ToolChoiceSupport,
+    OpenAiCacheRetention, OpenAiOutputTokenField, OpenAiReasoningFormat, OpenAiSessionAffinity,
+    OpenAiStreamTermination, Provider, ReasoningEffort, ToolChoice, ToolChoiceSupport,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -166,7 +166,20 @@ fn bundled_providers_match_the_frozen_matrix() {
         assert_eq!(provider.name(), expected.name);
         assert_eq!(provider.base_url(), expected.base_url);
         assert_eq!(provider.api_kind(), expected.api);
-        assert_eq!(openai.prompt_caching, OpenAiPromptCaching::Automatic);
+        // No provider in the matrix declares cache routing: no session-affinity
+        // shape, and no long-retention attestation.
+        assert_eq!(
+            openai.session_affinity,
+            OpenAiSessionAffinity::None,
+            "{}: session affinity",
+            expected.id,
+        );
+        assert_eq!(
+            openai.cache_retention,
+            OpenAiCacheRetention::Short,
+            "{}: cache retention",
+            expected.id,
+        );
         // Every bundled provider keeps the default request envelope: streamed
         // usage is requested and `max_tokens` carries the Output Budget.
         assert!(openai.streamed_usage, "{}: streamed usage", expected.id);

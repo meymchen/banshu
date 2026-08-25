@@ -171,6 +171,23 @@ images, which is such a boundary. The undeclared default sends neither,
 byte-compatible with the request bodies bundled providers have always sent.
 _Avoid_: tool message quirks, chat-template fixes
 
+**Cache-routing wire policies** (`OpenAiCompat::session_affinity`,
+`OpenAiCompat::cache_retention`, `OpenAiSessionAffinity`,
+`OpenAiCacheRetention`, issue #92):
+The prompt-cache routing shapes an OpenAI-compatible provider declares its
+endpoint accepts, as two independent closed policies. Session affinity names
+exactly which request fields carry the stable session id — OpenAI's
+`prompt_cache_key` body field (clamped to 64 characters) or the header trio
+`session_id`, `x-client-request-id`, `x-session-affinity` — and an undeclared
+endpoint receives none of them; routing never adds, removes, or rewrites
+credential headers. Cache retention attests the endpoint honours
+`prompt_cache_retention: "24h"`: a `Short` request keeps the endpoint's normal
+cache behavior, and an explicit `CacheRetention::Long` against an unattesting
+provider is refused in-band with `InvalidRequest` before any HTTP request. The
+undeclared defaults send no cache-routing field or header, byte-compatible
+with the request bodies bundled providers have always sent.
+_Avoid_: cache quirks, session stickiness
+
 **Context Overflow** (`ErrorKind::ContextOverflow`, `is_context_overflow`,
 issue #53):
 One classification over every provider signal that a request exceeded the

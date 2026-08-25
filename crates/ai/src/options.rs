@@ -60,7 +60,11 @@ pub enum CacheRetention {
     Disabled,
     /// Use the provider's short-lived/default prompt cache.
     Short,
-    /// Request the provider's extended prompt-cache lifetime when supported.
+    /// Request the provider's extended prompt-cache lifetime. Emitted only
+    /// when the provider attests a long-retention wire shape; against one
+    /// that does not, an explicit request is refused in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request.
     Long,
 }
 
@@ -89,6 +93,15 @@ pub struct StreamOptions {
     /// Maximum client-side retry attempts.
     pub max_retries: Option<u32>,
     /// Prompt-cache retention preference. `None` uses the provider default.
+    ///
+    /// `Some(..)` is an explicit request. [`CacheRetention::Long`] is checked
+    /// before dispatch against the retention the provider declares
+    /// ([`OpenAiCompat::cache_retention`](crate::OpenAiCompat::cache_retention));
+    /// a provider that attests no long-retention wire shape refuses the
+    /// request in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request — it is never silently dropped onto the endpoint's
+    /// normal cache behavior.
     pub cache_retention: Option<CacheRetention>,
     /// How much reasoning to ask the model for.
     ///
@@ -122,8 +135,11 @@ pub struct StreamOptions {
     /// any HTTP request — it is never silently remapped onto a choice the
     /// caller did not ask for.
     pub tool_choice: Option<ToolChoice>,
-    /// Stable conversation identifier used by providers that support
-    /// cache-routing keys or session-affinity headers.
+    /// Stable conversation identifier routed onto the session-affinity shape
+    /// the provider declares
+    /// ([`OpenAiCompat::session_affinity`](crate::OpenAiCompat::session_affinity))
+    /// — a cache-routing request field or session-affinity headers. An
+    /// endpoint with no declared affinity receives it nowhere.
     pub session_id: Option<String>,
     /// Request-level custom headers. The fixed priority is protocol defaults
     /// → provider defaults → [`Model::headers`](crate::Model::headers) →

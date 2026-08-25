@@ -36,6 +36,10 @@ Every fixed promise above is exercised without live credentials:
 - OpenAI/DeepSeek/Moonshot and Anthropic cache request/usage shapes:
   `crates/ai/tests/openai_prompt_caching.rs` and
   `crates/ai/tests/anthropic_prompt_caching.rs`.
+- OpenAI-compatible cache-routing policies (session affinity and the
+  long-retention attestation — no provider in the matrix declares either):
+  `crates/ai/tests/provider_conformance.rs` and
+  `crates/ai/tests/openai_prompt_caching.rs`.
 - OpenAI-compatible request envelopes (streamed-usage request and the
   output-token field carrying the Output Budget — every bundled provider
   keeps the default: usage requested, `max_tokens`):
