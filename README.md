@@ -52,7 +52,7 @@ auth and feature contract for each bundled provider.
 ## Custom providers
 
 Use the validated builder when a service needs explicit models, authentication,
-headers, compatibility settings, or more than one protocol adapter:
+headers, endpoint quirks, or more than one protocol adapter:
 
 ```rust
 use std::sync::Arc;
@@ -141,7 +141,7 @@ the protocol/provider supports it. Cache-read and cache-write usage is always
 normalized into `Usage` when providers report it.
 
 Persist conversations with `ContextSnapshotV1`; its versioned serde shape is
-the compatibility boundary. Model discovery overlays use a separate
+the persistence format. Model discovery overlays use a separate
 application-injected `ModelsStore` and `RefreshOptions`; set
 `allow_network = false` for a hard offline restore.
 
@@ -153,6 +153,3 @@ arrive in the terminal `AssistantMessage`, classified by `stop_reason` and
 `error_kind`, with safe detail in `error_message`. Use the normalized
 `stop_reason` for portable behavior and `raw_stop_reason` for provider-specific
 diagnostics.
-
-See [1.0 migrations](docs/migrations-1.0.md) before upgrading from the latest
-0.x release.

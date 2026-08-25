@@ -154,8 +154,7 @@ pub enum ProtocolEvent {
 impl ProtocolEvent {
     /// Build the appropriate terminal event from normalized and optional raw
     /// stop metadata. Keeping this choice here prevents adapters from each
-    /// reimplementing the compatibility path for custom adapters that still
-    /// emit [`Self::Stop`].
+    /// reimplementing the optional raw-reason branch.
     pub(crate) fn stop(reason: StopReason, raw_reason: Option<String>) -> Self {
         match raw_reason {
             Some(raw_reason) => Self::StopWithRaw { reason, raw_reason },
