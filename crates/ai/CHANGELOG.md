@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** configure request caching and reasoning through
+  `with_openai_compat` / `with_anthropic_compat`; the duplicated
+  `with_openai_prompt_caching`, `with_openai_reasoning_format`, and
+  `with_anthropic_reasoning_format` convenience setters were removed before
+  the 1.0 API freeze.
+- Added a compile-checked README, a provider conformance matrix, and a
+  warning-free rustdoc CI gate for the planned 1.0 public contract.
+
 ## [0.8.0](https://github.com/meymchen/banshu/compare/v0.7.0...v0.8.0) - 2026-08-23
 
 ### Added

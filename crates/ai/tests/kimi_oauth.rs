@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 
 use banshu_ai::{
     Auth, AuthInteraction, AuthInteractionHandler, Context, Credential, CredentialStore, Error,
-    ErrorKind, InMemoryCredentialStore, KimiDeviceFlow, Model, Models, OAuthCredential,
+    ErrorKind, InMemoryCredentialStore, KimiDeviceFlow, Model, Models, OAuthAuth, OAuthCredential,
     OAuthSession, Provider, Result, StopReason, StreamOptions, VerificationDetails, async_trait,
 };
 use wiremock::matchers::{body_string_contains, header, method, path};
@@ -109,6 +109,10 @@ struct Rig {
 /// A `Models` registry with the Kimi provider pointed at the mock server for
 /// both auth and inference, driven by the real [`KimiDeviceFlow`].
 fn rig(server_uri: &str) -> Rig {
+    rig_with_api_key_env(server_uri, "BANSHU_KIMI_TEST_DEFINITELY_UNSET")
+}
+
+fn rig_with_api_key_env(server_uri: &str, api_key_env: &'static str) -> Rig {
     let store = Arc::new(InMemoryCredentialStore::new());
     let flow = KimiDeviceFlow::new()
         .with_auth_host(server_uri)
@@ -119,13 +123,11 @@ fn rig(server_uri: &str) -> Rig {
         store.clone(),
         reqwest::Client::new(),
     );
-    let provider = Provider::anthropic_compatible(
-        "kimi",
-        "Kimi For Coding",
-        server_uri,
-        ["BANSHU_KIMI_TEST_DEFINITELY_UNSET"],
-    )
-    .with_auth(Auth::oauth(session));
+    let provider =
+        Provider::anthropic_compatible("kimi", "Kimi For Coding", server_uri, [api_key_env])
+            .with_auth(Auth::OAuth(
+                OAuthAuth::new(session).with_api_key_env([api_key_env]),
+            ));
     Rig {
         models: Models::new().with_provider(provider),
         store,
@@ -667,6 +669,62 @@ async fn access_token_authenticates_inference_via_bearer() {
     assert!(
         !requests[0].headers.contains_key("x-api-key"),
         "an OAuth access token is a bearer token, never an x-api-key"
+    );
+}
+
+#[tokio::test]
+async fn env_api_key_wins_over_the_stored_oauth_credential() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "sk-env-key"))
+        .respond_with(anthropic_ok_response())
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let var = "BANSHU_KIMI_TEST_ENV_PRIORITY";
+    let rig = rig_with_api_key_env(&server.uri(), var);
+    seed(
+        &rig.store,
+        OAuthCredential::new(
+            "access-live",
+            Some("refresh-1".into()),
+            Some(now_ms() + 3_600_000),
+        ),
+    )
+    .await;
+
+    let saved = std::env::var_os(var);
+    // SAFETY: this integration test runs in its own process, uses a unique
+    // variable, and restores the prior value before making assertions.
+    unsafe { std::env::set_var(var, "sk-env-key") };
+    let message = rig
+        .models
+        .stream(
+            &kimi_model(&server.uri()),
+            &Context::new().user("hi"),
+            &StreamOptions::default(),
+        )
+        .finish()
+        .await;
+    match saved {
+        Some(value) => {
+            // SAFETY: restore the variable changed above.
+            unsafe { std::env::set_var(var, value) };
+        }
+        None => {
+            // SAFETY: restore the variable changed above.
+            unsafe { std::env::remove_var(var) };
+        }
+    }
+
+    assert_eq!(message.stop_reason, StopReason::Stop);
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(requests.len(), 1);
+    assert!(
+        !requests[0].headers.contains_key("authorization"),
+        "the API-key override must replace the stored OAuth bearer token"
     );
 }
 

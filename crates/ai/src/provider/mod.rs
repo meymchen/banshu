@@ -489,29 +489,6 @@ impl Provider {
         self
     }
 
-    /// Configure the request-side prompt-cache controls accepted by this
-    /// OpenAI-compatible provider.
-    pub fn with_openai_prompt_caching(mut self, caching: OpenAiPromptCaching) -> Self {
-        self.openai_compat.prompt_caching = caching;
-        self
-    }
-
-    /// Declare the reasoning request shape this OpenAI-compatible endpoint
-    /// accepts. Also decides the token-budget capability stamped onto the
-    /// models this provider serves.
-    pub fn with_openai_reasoning_format(mut self, format: OpenAiReasoningFormat) -> Self {
-        self.openai_compat.reasoning_format = format;
-        self
-    }
-
-    /// Declare the reasoning request shape this Anthropic-compatible endpoint
-    /// accepts; see
-    /// [`with_openai_reasoning_format`](Self::with_openai_reasoning_format).
-    pub fn with_anthropic_reasoning_format(mut self, format: AnthropicReasoningFormat) -> Self {
-        self.anthropic_compat.reasoning_format = format;
-        self
-    }
-
     /// OpenAI — Chat Completions with explicit prompt-cache routing support.
     ///
     /// Reasoning: top-level `reasoning_effort`. Tool choice: all four choices,
@@ -691,7 +668,10 @@ impl Provider {
             "https://api.kimi.com/coding",
             ["KIMI_API_KEY"],
         )
-        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingToggle)
+        .with_anthropic_compat(AnthropicCompat {
+            reasoning_format: AnthropicReasoningFormat::ThinkingToggle,
+            ..AnthropicCompat::default()
+        })
         .with_models_dev_id("kimi-for-coding");
         let session = crate::OAuthSession::new(
             "kimi",

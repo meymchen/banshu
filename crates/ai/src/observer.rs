@@ -25,9 +25,9 @@ pub(crate) const REDACTED: &str = "[REDACTED]";
 
 /// What the request looks like immediately before one send.
 ///
-/// Constructed only by the crate, already redacted — see the [module
-/// documentation](self) for what that covers. An observer receives this by
-/// shared reference: it can read but never rewrite the outgoing request.
+/// Constructed only by the crate, already redacted — see [`RequestObserver`]
+/// for what that covers. An observer receives this by shared reference: it can
+/// read but never rewrite the outgoing request.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct BeforeSendObservation {

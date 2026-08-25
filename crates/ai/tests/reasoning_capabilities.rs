@@ -19,8 +19,9 @@
 //! contract, and pins that the no-reasoning payload has not moved.
 
 use banshu_ai::{
-    AnthropicReasoningFormat, CapabilitySupport, Context, ErrorKind, Model, OpenAiReasoningFormat,
-    Provider, ReasoningCapability, ReasoningEffort, ReasoningOptions, StreamOptions,
+    AnthropicCompat, AnthropicReasoningFormat, CapabilitySupport, Context, ErrorKind, Model,
+    OpenAiReasoningFormat, Provider, ReasoningCapability, ReasoningEffort, ReasoningOptions,
+    StreamOptions,
 };
 use serde_json::Value;
 use wiremock::matchers::{method, path};
@@ -145,7 +146,10 @@ fn provider(id: &str) -> Provider {
 /// the vehicle for the budget checks that are about the *model*.
 fn budget_provider(server: &MockServer) -> Provider {
     Provider::anthropic_compatible("custom", "Custom", server.uri(), ["TEST_API_KEY"])
-        .with_anthropic_reasoning_format(AnthropicReasoningFormat::ThinkingBudget)
+        .with_anthropic_compat(AnthropicCompat {
+            reasoning_format: AnthropicReasoningFormat::ThinkingBudget,
+            ..AnthropicCompat::default()
+        })
 }
 
 /// A caller-supplied model of [`budget_provider`], attesting the baseline
