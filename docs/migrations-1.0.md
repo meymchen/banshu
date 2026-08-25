@@ -25,6 +25,12 @@ assert!(options.observer.is_none());
 Persisted `AssistantMessage` and `ContextSnapshotV1` JSON remains readable:
 both new fields default to absent during deserialization.
 
+Unknown provider stop reasons now normalize to `StopReason::Unknown`, not
+`StopReason::Stop`. Code that treats every successful reason other than
+`Length` or `ToolUse` as a normal stop should add an `Unknown` arm and inspect
+`raw_stop_reason` for diagnostics. Known provider reasons keep their previous
+normalized values.
+
 ## Configure compatibility as one value
 
 The narrow `Provider::with_openai_prompt_caching`,

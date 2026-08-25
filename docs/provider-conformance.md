@@ -1,8 +1,8 @@
 # Provider conformance
 
-This matrix freezes the bundled provider contract planned for 1.0. “Model
-dependent” means the catalog or discovery source must attest the capability for
-the selected model; `Unknown` is never treated as supported. “Automatic” means
+This matrix freezes the bundled provider contract planned for 1.0. "Model
+dependent" means the catalog or discovery source must attest the capability for
+the selected model; `Unknown` is never treated as supported. "Automatic" means
 banshu sends no request-side cache extension but still normalizes cache usage
 reported by the provider.
 

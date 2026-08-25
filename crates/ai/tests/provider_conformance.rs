@@ -13,7 +13,7 @@ use banshu_ai::{
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-struct Expected {
+struct ProviderExpectation {
     build: fn() -> Provider,
     id: &'static str,
     name: &'static str,
@@ -28,9 +28,9 @@ struct Expected {
     strict_tools: bool,
 }
 
-fn providers() -> [Expected; 7] {
+fn providers() -> [ProviderExpectation; 7] {
     [
-        Expected {
+        ProviderExpectation {
             build: Provider::deepseek,
             id: "deepseek",
             name: "DeepSeek",
@@ -54,7 +54,7 @@ fn providers() -> [Expected; 7] {
             },
             strict_tools: false,
         },
-        Expected {
+        ProviderExpectation {
             build: Provider::zai,
             id: "zai",
             name: "Z.AI",
@@ -71,7 +71,7 @@ fn providers() -> [Expected; 7] {
             },
             strict_tools: false,
         },
-        Expected {
+        ProviderExpectation {
             build: Provider::moonshot,
             id: "moonshot",
             name: "Moonshot AI",
@@ -85,7 +85,7 @@ fn providers() -> [Expected; 7] {
             tool_choice: ToolChoiceSupport::ALL,
             strict_tools: true,
         },
-        Expected {
+        ProviderExpectation {
             build: Provider::xiaomi,
             id: "xiaomi",
             name: "Xiaomi MiMo",
@@ -102,7 +102,7 @@ fn providers() -> [Expected; 7] {
             },
             strict_tools: true,
         },
-        Expected {
+        ProviderExpectation {
             build: || Provider::kimi(Arc::new(InMemoryCredentialStore::new())),
             id: "kimi",
             name: "Kimi For Coding",
@@ -116,7 +116,7 @@ fn providers() -> [Expected; 7] {
             tool_choice: ToolChoiceSupport::NONE,
             strict_tools: false,
         },
-        Expected {
+        ProviderExpectation {
             build: || {
                 Provider::minimax(
                     MiniMaxRegion::Global,
@@ -135,7 +135,7 @@ fn providers() -> [Expected; 7] {
             tool_choice: ToolChoiceSupport::ALL,
             strict_tools: false,
         },
-        Expected {
+        ProviderExpectation {
             build: || {
                 Provider::minimax(MiniMaxRegion::Cn, Arc::new(InMemoryCredentialStore::new()))
             },
@@ -168,29 +168,25 @@ fn bundled_providers_match_the_frozen_matrix() {
         assert_eq!(openai.prompt_caching, OpenAiPromptCaching::Automatic);
         assert_eq!(openai.reasoning_format, expected.openai_reasoning);
         assert_eq!(anthropic.reasoning_format, expected.anthropic_reasoning);
-        assert_eq!(
-            match expected.api {
-                ApiKind::OpenAiCompletions => openai.reasoning_efforts,
-                ApiKind::AnthropicMessages => anthropic.reasoning_efforts,
-                _ => unreachable!("all current protocols are covered"),
-            },
-            expected.efforts,
-        );
-        let actual_tool_choice = match expected.api {
-            ApiKind::OpenAiCompletions => openai.tool_choice,
-            ApiKind::AnthropicMessages => anthropic.tool_choice,
+        let (actual_efforts, actual_tool_choice, actual_strict) = match expected.api {
+            ApiKind::OpenAiCompletions => (
+                openai.reasoning_efforts,
+                openai.tool_choice,
+                openai.strict_tool_schemas,
+            ),
+            ApiKind::AnthropicMessages => (
+                anthropic.reasoning_efforts,
+                anthropic.tool_choice,
+                anthropic.strict_tool_schemas,
+            ),
             _ => unreachable!("all current protocols are covered"),
         };
+        assert_eq!(actual_efforts, expected.efforts);
         assert_eq!(actual_tool_choice, expected.tool_choice);
         assert_eq!(
             actual_tool_choice.supports(&ToolChoice::Named("tool".into())),
             expected.tool_choice.named,
         );
-        let actual_strict = match expected.api {
-            ApiKind::OpenAiCompletions => openai.strict_tool_schemas,
-            ApiKind::AnthropicMessages => anthropic.strict_tool_schemas,
-            _ => unreachable!("all current protocols are covered"),
-        };
         assert_eq!(actual_strict, expected.strict_tools);
         assert_eq!(provider.oauth_session().is_some(), expected.oauth);
     }
