@@ -71,6 +71,20 @@ impl ProtocolAdapter for PlainTextProtocol {
     }
 }
 
+struct PendingTerminalProtocol;
+
+impl ProtocolAdapter for PendingTerminalProtocol {
+    fn kind(&self) -> ApiKind {
+        ApiKind::OpenAiCompletions
+    }
+
+    fn stream(&self, _request: PreparedRequest) -> ProtocolEventStream {
+        Box::pin(futures::stream::iter([ProtocolEvent::Stop(
+            StopReason::Pending,
+        )]))
+    }
+}
+
 fn model_for(provider: &str, id: &str, base_url: &str) -> Model {
     let mut model = Model::openai_completions(id).with_base_url(base_url);
     model.provider = provider.to_string();
@@ -111,6 +125,28 @@ async fn external_adapter_streams_end_to_end_via_builder() {
     assert_eq!(message.text(), "EXT OK");
     assert_eq!(message.provider, "ext");
     assert_eq!(message.api, "openai-completions");
+}
+
+#[tokio::test]
+async fn pending_cannot_be_used_as_a_terminal_reason() {
+    let model = model_for("ext", "ext-1", "http://localhost");
+    let provider = Provider::builder("ext", "Ext", "http://localhost")
+        .adapter(Arc::new(PendingTerminalProtocol))
+        .model(model.clone())
+        .build()
+        .expect("valid provider");
+
+    let message = provider
+        .stream(
+            &model,
+            &Context::new().user("hi"),
+            &StreamOptions::default(),
+        )
+        .finish()
+        .await;
+
+    assert_eq!(message.stop_reason, StopReason::Error);
+    assert_eq!(message.error_kind, Some(ErrorKind::Protocol));
 }
 
 #[tokio::test]

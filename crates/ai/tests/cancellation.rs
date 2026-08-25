@@ -142,7 +142,7 @@ async fn cancel_during_resolver_wait() {
     let mut stream = provider.stream(&model, &context(), &options);
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
 
     let handle = tokio::spawn(collect_remaining(stream));
@@ -170,7 +170,7 @@ async fn cancel_during_http_connect() {
     let mut stream = provider.stream(&model, &context(), &options);
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
 
     let handle = tokio::spawn(collect_remaining(stream));
@@ -206,7 +206,7 @@ async fn cancel_during_retry_backoff_sleep() {
     let mut stream = provider.stream(&model, &context(), &options);
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
     // Drive until the Retry event, proving the next poll is about to enter
     // the (paused) backoff sleep.
@@ -243,7 +243,7 @@ async fn cancel_before_first_content_terminates_aborted() {
     let mut stream = provider.stream(&model, &context(), &options);
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
 
     let handle = tokio::spawn(collect_remaining(stream));
@@ -274,7 +274,7 @@ async fn cancel_mid_text_preserves_partial_content() {
     let mut stream = provider.stream(&model, &context(), &options);
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
     assert!(matches!(
         stream.next().await,
@@ -312,7 +312,7 @@ async fn cancel_mid_thinking_preserves_partial_content() {
     let mut stream = provider.stream(&model, &context(), &options);
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
     assert!(matches!(
         stream.next().await,
@@ -358,7 +358,7 @@ async fn cancel_mid_tool_call_preserves_partial_arguments() {
     let mut stream = provider.stream(&model, &context(), &options);
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
     assert!(matches!(
         stream.next().await,
@@ -436,7 +436,7 @@ async fn dropping_the_stream_without_cancelling_drops_the_in_flight_protocol_fut
     let mut stream = provider.stream(&model, &context(), &StreamOptions::default());
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
     assert!(matches!(
         stream.next().await,

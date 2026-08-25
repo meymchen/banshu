@@ -8,6 +8,109 @@ use banshu_ai::{
 use futures::{FutureExt, StreamExt};
 
 #[tokio::test]
+async fn start_installs_the_complete_pending_response_identity() {
+    let faux = FauxProvider::new("test-model", FauxScript::success([], FauxStopReason::Stop));
+    let mut stream = faux.stream(&Context::new().user("hi"), &StreamOptions::default());
+
+    let Some(AssistantMessageEvent::Start { message }) = stream.next().await else {
+        panic!("expected Start");
+    };
+
+    assert_eq!(message.provider, "faux");
+    assert_eq!(message.model, "test-model");
+    assert_eq!(message.api, "openai-completions");
+    assert!(message.timestamp > 0);
+    assert!(message.content.is_empty());
+    assert_eq!(message.usage, Usage::default());
+    assert_eq!(message.stop_reason, StopReason::Pending);
+    assert_eq!(stream.partial(), &message);
+    assert!(stream.result().is_none());
+}
+
+#[tokio::test]
+async fn partial_tracks_every_content_kind_until_success_replaces_it() {
+    let faux = FauxProvider::new(
+        "test-model",
+        FauxScript::success(
+            [
+                FauxEvent::thinking("consider", None::<String>, false),
+                FauxEvent::text("answer"),
+                FauxEvent::tool_call("call_1", "lookup", r#"{"q":"rust"}"#),
+            ],
+            FauxStopReason::ToolUse,
+        ),
+    );
+    let mut stream = faux.stream(&Context::new().user("hi"), &StreamOptions::default());
+
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::Start { .. })
+    ));
+
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::ThinkingStart { .. })
+    ));
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::ThinkingDelta { .. })
+    ));
+    let AssistantContent::Thinking(thinking) = &stream.partial().content[0] else {
+        panic!("expected partial thinking");
+    };
+    assert_eq!(thinking.thinking, "consider");
+    assert_eq!(stream.partial().stop_reason, StopReason::Pending);
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::ThinkingEnd { .. })
+    ));
+
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::TextStart { .. })
+    ));
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::TextDelta { .. })
+    ));
+    assert_eq!(stream.partial().text(), "answer");
+    assert_eq!(stream.partial().stop_reason, StopReason::Pending);
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::TextEnd { .. })
+    ));
+
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::ToolCallStart { .. })
+    ));
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::ToolCallDelta { .. })
+    ));
+    let AssistantContent::ToolCall(call) = &stream.partial().content[2] else {
+        panic!("expected partial tool call");
+    };
+    assert_eq!(call.id, "call_1");
+    assert_eq!(call.name, "lookup");
+    assert_eq!(call.arguments, serde_json::json!({"q": "rust"}));
+    assert_eq!(stream.partial().stop_reason, StopReason::Pending);
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::ToolCallEnd { .. })
+    ));
+
+    let Some(AssistantMessageEvent::Done { reason, message }) = stream.next().await else {
+        panic!("expected Done");
+    };
+    assert_eq!(reason, StopReason::ToolUse);
+    assert_eq!(message.stop_reason, StopReason::ToolUse);
+    assert_ne!(message.stop_reason, StopReason::Pending);
+    assert_eq!(stream.partial(), &message);
+    assert_eq!(stream.result(), Some(&message));
+}
+
+#[tokio::test]
 async fn fixed_success_script_produces_repeatable_content_and_usage() {
     let usage = Usage {
         input: 11,
@@ -62,6 +165,7 @@ async fn terminal_failure_is_reported_in_band_without_credentials_or_network() {
         .await;
 
     assert_eq!(message.stop_reason, StopReason::Error);
+    assert_ne!(message.stop_reason, StopReason::Pending);
     assert_eq!(message.text(), "partial answer");
     assert_eq!(message.error_kind, Some(ErrorKind::Api));
     assert_eq!(
@@ -168,6 +272,7 @@ async fn cancellation_during_a_scripted_delay_terminates_aborted() {
         "test-model",
         FauxScript::success(
             [
+                FauxEvent::text("partial"),
                 FauxEvent::delay(Duration::from_secs(60)),
                 FauxEvent::text("too late"),
             ],
@@ -183,7 +288,21 @@ async fn cancellation_during_a_scripted_delay_terminates_aborted() {
 
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
+    ));
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::TextStart { .. })
+    ));
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::TextDelta { .. })
+    ));
+    assert_eq!(stream.partial().text(), "partial");
+    assert_eq!(stream.partial().stop_reason, StopReason::Pending);
+    assert!(matches!(
+        stream.next().await,
+        Some(AssistantMessageEvent::TextEnd { .. })
     ));
     let next = stream.next();
     futures::pin_mut!(next);
@@ -195,5 +314,6 @@ async fn cancellation_during_a_scripted_delay_terminates_aborted() {
     };
     assert_eq!(reason, StopReason::Aborted);
     assert_eq!(error.stop_reason, StopReason::Aborted);
-    assert_eq!(error.text(), "");
+    assert_ne!(error.stop_reason, StopReason::Pending);
+    assert_eq!(error.text(), "partial");
 }

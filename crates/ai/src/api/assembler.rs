@@ -801,6 +801,6 @@ mod tests {
         let message = a.into_message();
         assert_eq!(message.diagnostics.len(), 1);
         assert_eq!(message.diagnostics[0].code, DiagnosticCode::ImageDowngraded);
-        assert_eq!(message.stop_reason, StopReason::Stop);
+        assert_eq!(message.stop_reason, StopReason::Pending);
     }
 }

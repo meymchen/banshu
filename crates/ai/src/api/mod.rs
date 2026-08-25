@@ -234,12 +234,15 @@ pub(crate) fn drive(
     let http_client = http_client.clone();
 
     let stream = async_stream::stream! {
-        let mut assembler = MessageAssembler::new(AssistantMessage::streaming(
+        let initial_message = AssistantMessage::streaming(
             &model.id,
             &model.provider,
             api_name(adapter.kind()),
-        ));
-        yield AssistantMessageEvent::Start;
+        );
+        let mut assembler = MessageAssembler::new(initial_message.clone());
+        yield AssistantMessageEvent::Start {
+            message: initial_message,
+        };
 
         // Resolve one shared output cap before either protocol sees the
         // request. Explicit caps are caller intent and fail instead of being
@@ -338,6 +341,14 @@ pub(crate) fn drive(
             };
             let Some(event) = next else { break };
             if let Some(reason) = event.normalized_stop_reason() {
+                if reason == StopReason::Pending {
+                    yield assembler.fail(
+                        ErrorKind::Protocol,
+                        "protocol adapter used Pending as a terminal stop reason",
+                        Vec::new(),
+                    );
+                    return;
+                }
                 stop_reason = Some(reason);
             }
             // Keep applying after `Stop`: content events that illegally

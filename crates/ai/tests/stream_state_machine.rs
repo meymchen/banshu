@@ -2,9 +2,9 @@
 //!
 //! Every stream emits exactly one `Start`, then a full `*Start`/`*Delta`/`*End`
 //! sequence per content block (with a stable `content_index` across a block's
-//! events), then exactly one terminal `Done`/`Error`. No non-terminal event
-//! carries a full message snapshot — the compiler enforces that (there is no
-//! `partial` field), and this suite pins the ordering and single-termination.
+//! events), then exactly one terminal `Done`/`Error`. `Start` carries the empty
+//! response identity; no delta carries a full message snapshot, and this suite
+//! pins the ordering and single-termination.
 
 use banshu_ai::{
     AssistantMessage, AssistantMessageEvent, Context, Model, Provider, StopReason, StreamOptions,
@@ -80,11 +80,14 @@ async fn full_start_delta_end_sequence_with_stable_content_index() {
     let events = collect(&server).await;
 
     // Exactly one Start, first.
-    assert!(matches!(events.first(), Some(AssistantMessageEvent::Start)));
+    assert!(matches!(
+        events.first(),
+        Some(AssistantMessageEvent::Start { .. })
+    ));
     assert_eq!(
         events
             .iter()
-            .filter(|e| matches!(e, AssistantMessageEvent::Start))
+            .filter(|e| matches!(e, AssistantMessageEvent::Start { .. }))
             .count(),
         1
     );
@@ -291,8 +294,10 @@ async fn protocol_error_terminates_exactly_once() {
 async fn aborted_terminal_is_reported_once() {
     let mut aborted = AssistantMessage::from_content(Vec::new());
     aborted.stop_reason = StopReason::Aborted;
+    let mut pending = AssistantMessage::from_content(Vec::new());
+    pending.stop_reason = StopReason::Pending;
     let events = vec![
-        AssistantMessageEvent::Start,
+        AssistantMessageEvent::Start { message: pending },
         AssistantMessageEvent::Error {
             reason: StopReason::Aborted,
             error: aborted,
