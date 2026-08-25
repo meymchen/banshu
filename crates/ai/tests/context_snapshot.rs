@@ -354,6 +354,10 @@ fn enums_serialize_to_stable_string_values() {
         serde_json::json!("unknown")
     );
     assert_eq!(
+        serde_json::to_value(StopReason::Pending).unwrap(),
+        serde_json::json!("pending")
+    );
+    assert_eq!(
         serde_json::from_value::<ErrorKind>(serde_json::json!("streamInterrupted")).unwrap(),
         ErrorKind::StreamInterrupted
     );

@@ -210,7 +210,7 @@ fn redact_long_base64_runs(message: &str) -> String {
     output
 }
 
-/// Provider-independent classification of why a completion stopped.
+/// Provider-independent state or terminal reason for an assistant response.
 ///
 /// This vocabulary is stable across providers. When inspecting provider
 /// compatibility or newly introduced wire values, use
@@ -219,6 +219,8 @@ fn redact_long_base64_runs(message: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StopReason {
+    /// The assistant response is still in progress.
+    Pending,
     /// Natural end of turn.
     Stop,
     /// Hit the max-tokens limit.
@@ -300,7 +302,8 @@ where
     })
 }
 
-/// An assembled assistant turn — the terminal value of a [`MessageStream`](crate::MessageStream).
+/// An assistant turn, from the empty `Pending` value through the terminal
+/// value of a [`MessageStream`](crate::MessageStream).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantMessage {
@@ -323,8 +326,9 @@ pub struct AssistantMessage {
     pub diagnostics: Vec<Diagnostic>,
     /// Token usage and cost.
     pub usage: Usage,
-    /// Stable, provider-independent classification of why the completion
-    /// stopped. Provider vocabularies may evolve independently; when this is
+    /// Stable, provider-independent response state or terminal reason.
+    /// [`StopReason::Pending`] marks an in-progress stream; terminal provider
+    /// vocabularies may evolve independently, so when this is
     /// [`StopReason::Unknown`], inspect [`Self::raw_stop_reason`].
     pub stop_reason: StopReason,
     /// Exact provider `finish_reason`/`stop_reason`, when one was received.
@@ -378,7 +382,7 @@ impl AssistantMessage {
             response_id: None,
             diagnostics: Vec::new(),
             usage: Usage::default(),
-            stop_reason: StopReason::Stop,
+            stop_reason: StopReason::Pending,
             raw_stop_reason: None,
             error_message: None,
             error_kind: None,

@@ -106,7 +106,7 @@ async fn tool_call_start_exposes_identity_before_the_first_delta() {
 
     assert!(matches!(
         stream.next().await,
-        Some(AssistantMessageEvent::Start)
+        Some(AssistantMessageEvent::Start { .. })
     ));
     match stream.next().await {
         Some(AssistantMessageEvent::ToolCallStart {

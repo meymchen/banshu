@@ -19,14 +19,20 @@ use crate::types::{
 
 /// A single incremental event in a streamed assistant response.
 ///
-/// Non-terminal events carry only their own incremental payload — never a full
-/// message snapshot. A consumer that wants the message assembled so far reads
-/// [`MessageStream::partial`]; the complete message travels exactly once, on
-/// the terminal [`Done`](Self::Done)/[`Error`](Self::Error) event.
+/// `Start` carries the one complete empty message that establishes response
+/// identity. Later non-terminal events carry only their own incremental
+/// payload — never another full message snapshot. A consumer that wants the
+/// message assembled so far reads [`MessageStream::partial`]; the complete
+/// populated message travels exactly once, on the terminal
+/// [`Done`](Self::Done)/[`Error`](Self::Error) event.
 #[derive(Debug, Clone)]
 pub enum AssistantMessageEvent {
     /// Emitted once at the start, before any content.
-    Start,
+    Start {
+        /// The complete empty assistant response that subsequent deltas update.
+        /// Its stop reason is [`StopReason::Pending`].
+        message: AssistantMessage,
+    },
     /// A text content block has begun.
     TextStart {
         /// Index of the content block.
@@ -161,8 +167,9 @@ impl MessageStream {
 
     /// The message as assembled from every event observed so far (via
     /// [`Stream::poll_next`] or [`finish`](Self::finish)). Before the first
-    /// event, this is an empty placeholder; its `model`/`provider` are filled
-    /// in only once the terminal `Done`/`Error` message arrives.
+    /// event, this is an empty placeholder. Once `Start` is observed, it
+    /// carries the requested model, provider, protocol, timestamp, empty
+    /// usage/content, and [`StopReason::Pending`].
     ///
     /// A tool call in progress already carries its `id`/`name` from
     /// `ToolCallStart`; every `ToolCallDelta` appends to its `raw_arguments`
@@ -203,7 +210,10 @@ impl MessageStream {
     /// assembler built, without the per-delta clone.
     fn record(&mut self, event: &AssistantMessageEvent) {
         match event {
-            AssistantMessageEvent::Start | AssistantMessageEvent::Retry { .. } => {}
+            AssistantMessageEvent::Start { message } => {
+                self.partial = message.clone();
+            }
+            AssistantMessageEvent::Retry { .. } => {}
             AssistantMessageEvent::TextStart { .. } => {
                 self.partial
                     .content
