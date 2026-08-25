@@ -466,6 +466,17 @@ streaming contract, including timing, cancellation, setup retries, content,
 usage, and in-band failures.
 _Avoid_: mock server, fake HTTP provider
 
+**HTTP Client** (`ProviderBuilder::http_client`, `Provider::with_http_client`,
+issue #88):
+The application-injectable `reqwest::Client` every provider-owned request goes
+through — inference, Catalog Refresh, Probe, and the prepared request handed to
+a custom protocol adapter — so that traffic shares the application's proxy,
+certificate, DNS, connection-pool, and default-header policy. A provider given
+no client constructs the crate's feature-selected default. An OAuth Session
+captured its client at construction and is not retargeted by a later
+replacement.
+_Avoid_: transport config, shared client
+
 **Context Snapshot** (`ContextSnapshotV1`):
 The versioned JSON persistence format for a `Context`, pinned by a golden
 fixture. The serialized shape (camelCase, `role`/`type` tags) is a published

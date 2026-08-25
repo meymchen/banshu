@@ -22,8 +22,9 @@ use crate::types::{ApiKind, Model};
 /// [`Provider::builder`](crate::Provider::builder)) and at least one
 /// [`ProtocolAdapter`], at most one per [`ApiKind`]. Optional: auth (defaults
 /// to [`Auth::keyless`]), provider-level default headers (empty by default),
-/// caller-supplied models, endpoint quirks, and a models.dev id for catalog
-/// refresh. Each registered model must belong to this provider id and speak a
+/// caller-supplied models, endpoint quirks, a models.dev id for catalog
+/// refresh, and an application-owned HTTP client (the crate default otherwise).
+/// Each registered model must belong to this provider id and speak a
 /// protocol an adapter covers.
 pub struct ProviderBuilder {
     id: String,
@@ -36,6 +37,7 @@ pub struct ProviderBuilder {
     openai_compat: OpenAiCompat,
     anthropic_compat: AnthropicCompat,
     models_dev_id: Option<String>,
+    http_client: Option<reqwest::Client>,
 }
 
 impl ProviderBuilder {
@@ -55,6 +57,7 @@ impl ProviderBuilder {
             openai_compat: OpenAiCompat::default(),
             anthropic_compat: AnthropicCompat::default(),
             models_dev_id: None,
+            http_client: None,
         }
     }
 
@@ -113,6 +116,17 @@ impl ProviderBuilder {
         self
     }
 
+    /// Supply the application-owned HTTP client every provider-owned request
+    /// goes through — inference, Catalog Refresh, Probe, and the
+    /// [`PreparedRequest`](crate::PreparedRequest) handed to adapters — so
+    /// they share the application's proxy, certificate, DNS,
+    /// connection-pool, and default-header policy. Without one, the provider
+    /// constructs the crate's default client at build time.
+    pub fn http_client(mut self, client: reqwest::Client) -> Self {
+        self.http_client = Some(client);
+        self
+    }
+
     /// Validate and build the provider.
     ///
     /// Fails with [`Error::Config`] when the id is empty, no adapter is
@@ -165,7 +179,7 @@ impl ProviderBuilder {
             adapters,
             headers: self.headers,
             models: self.models,
-            http: http::build_client(),
+            http: self.http_client.unwrap_or_else(http::build_client),
             openai_compat: self.openai_compat,
             anthropic_compat: self.anthropic_compat,
             models_dev_id: self.models_dev_id,
