@@ -41,6 +41,11 @@ Every fixed promise above is exercised without live credentials:
   keeps the default: usage requested, `max_tokens`):
   `crates/ai/tests/provider_conformance.rs` and
   `crates/ai/tests/openai_request_envelope.rs`.
+- OpenAI-compatible stream termination (every bundled provider keeps the
+  strict default: a bare EOF without `[DONE]` or `finish_reason` is a dropped
+  connection; declared clean-EOF completion and its failure modes):
+  `crates/ai/tests/provider_conformance.rs` and
+  `crates/ai/tests/openai_completions_termination.rs`.
 
 Tool calling and image input themselves are explicitly model dependent. Their
 catalog attestations are covered by `crates/ai/tests/model_capabilities.rs`;

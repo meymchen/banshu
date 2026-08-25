@@ -15,8 +15,10 @@ use crate::CacheRetention;
 use crate::executor::{self, ExecutorEvent};
 use crate::http;
 use crate::observer::ObservationPlan;
+use crate::partial_json::{self, PartialArguments};
 use crate::provider::{
     OpenAiCompat, OpenAiOutputTokenField, OpenAiPromptCaching, OpenAiReasoningFormat,
+    OpenAiStreamTermination,
 };
 use crate::types::{
     ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model,
@@ -83,6 +85,7 @@ impl ProtocolAdapter for OpenAiCompletions {
         let timeout = options.timeout;
         let max_retries = options.max_retries.unwrap_or(http::DEFAULT_MAX_RETRIES);
         let max_retry_delay = options.max_retry_delay;
+        let stream_termination = openai_compat.stream_termination;
 
         let stream = async_stream::stream! {
             let base = auth.base_url.as_deref().unwrap_or(&base_url);
@@ -110,7 +113,8 @@ impl ProtocolAdapter for OpenAiCompletions {
             // compatible servers close the connection right after the
             // finish_reason-bearing chunk without sending it; either counts
             // as having formally terminated. A bare EOF with neither is a
-            // dropped connection, not a completed response.
+            // dropped connection, not a completed response — unless the
+            // provider declared clean-EOF completion, checked below.
             let mut terminated_formally = false;
 
             let mut exec = std::pin::pin!(executor::execute(factory, max_retries, max_retry_delay, observation));
@@ -239,6 +243,7 @@ impl ProtocolAdapter for OpenAiCompletions {
                                 if let Some(fragment) = function.arguments
                                     && !fragment.is_empty()
                                 {
+                                    accum.arguments.push_str(&fragment);
                                     arguments = Some(fragment);
                                 }
                             }
@@ -279,12 +284,36 @@ impl ProtocolAdapter for OpenAiCompletions {
             }
 
             if !terminated_formally {
-                yield ProtocolEvent::Failure {
-                    kind: crate::ErrorKind::StreamInterrupted,
-                    message: "connection closed before a completion signal ([DONE] or finish_reason)".to_string(),
-                    diagnostics: Vec::new(),
+                // A declared clean-EOF policy infers completion only from a
+                // structurally finished response: at least one content block
+                // must have started (an empty stream is no response at all —
+                // indistinguishable from a drop before the first chunk), and
+                // every tool call's accumulated arguments must be complete
+                // JSON. Anything less — or no declaration — stays the dropped
+                // connection a bare EOF is. (Text and thinking carry no wire
+                // terminator of their own; a chunk cut mid-event already
+                // failed as a protocol violation above, and a transport
+                // failure never reaches here — the executor reports it
+                // itself.)
+                let started_a_block = thinking_block_id.is_some()
+                    || text_block_id.is_some()
+                    || tools.iter().any(|accum| accum.block_id.is_some());
+                let inferred = stream_termination == OpenAiStreamTermination::CleanEofCompletion
+                    && started_a_block
+                    && tools.iter().all(ToolAccum::arguments_complete);
+                if !inferred {
+                    yield ProtocolEvent::Failure {
+                        kind: crate::ErrorKind::StreamInterrupted,
+                        message: "connection closed before a completion signal ([DONE] or finish_reason)".to_string(),
+                        diagnostics: Vec::new(),
+                    };
+                    return;
+                }
+                stop_reason = if tools.iter().any(|accum| accum.block_id.is_some()) {
+                    StopReason::ToolUse
+                } else {
+                    StopReason::Stop
                 };
-                return;
             }
 
             // Close whatever blocks the wire left open, then report usage and
@@ -312,8 +341,10 @@ impl ProtocolAdapter for OpenAiCompletions {
 }
 
 /// Tracks a single tool call's identity and start state across streamed
-/// deltas. Arguments are not accumulated here — each fragment is yielded as a
-/// [`ProtocolEvent::ToolCallDelta`] as it arrives.
+/// deltas. Argument fragments are yielded as [`ProtocolEvent::ToolCallDelta`]s
+/// as they arrive; they are *also* accumulated here so a declared clean-EOF
+/// completion can check structural finish (complete arguments JSON) before
+/// inferring success.
 #[derive(Default)]
 struct ToolAccum {
     id: String,
@@ -321,6 +352,19 @@ struct ToolAccum {
     /// Assigned when the block's `ToolCallStart` is emitted; `None` while the
     /// slot has only been resized into existence.
     block_id: Option<u64>,
+    /// Every argument fragment received so far, concatenated.
+    arguments: String,
+}
+
+impl ToolAccum {
+    /// Whether the accumulated arguments form a structurally finished call:
+    /// complete JSON, or no fragments at all — an argument-less call, matching
+    /// the crate's convention that empty arguments snapshot as an empty
+    /// object. A truncated or malformed accumulation is unfinished.
+    fn arguments_complete(&self) -> bool {
+        let raw = self.arguments.trim();
+        raw.is_empty() || matches!(partial_json::parse(raw), PartialArguments::Complete(_))
+    }
 }
 
 /// Map an OpenAI `finish_reason` to a banshu [`StopReason`].

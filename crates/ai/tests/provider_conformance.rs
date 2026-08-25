@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use banshu_ai::{
     AnthropicReasoningFormat, ApiKind, InMemoryCredentialStore, MiniMaxRegion,
-    OpenAiOutputTokenField, OpenAiPromptCaching, OpenAiReasoningFormat, Provider, ReasoningEffort,
-    ToolChoice, ToolChoiceSupport,
+    OpenAiOutputTokenField, OpenAiPromptCaching, OpenAiReasoningFormat, OpenAiStreamTermination,
+    Provider, ReasoningEffort, ToolChoice, ToolChoiceSupport,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -174,6 +174,14 @@ fn bundled_providers_match_the_frozen_matrix() {
             openai.output_token_field,
             OpenAiOutputTokenField::MaxTokens,
             "{}: output token field",
+            expected.id,
+        );
+        // No bundled provider attests clean-EOF completion: a bare EOF stays
+        // a dropped connection everywhere.
+        assert_eq!(
+            openai.stream_termination,
+            OpenAiStreamTermination::Strict,
+            "{}: stream termination",
             expected.id,
         );
         assert_eq!(openai.reasoning_format, expected.openai_reasoning);

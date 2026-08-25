@@ -143,6 +143,21 @@ with `max_tokens`, byte-compatible with the request bodies bundled providers
 have always sent.
 _Avoid_: wire envelope, request framing
 
+**Stream Termination** (`OpenAiCompat::stream_termination`,
+`OpenAiStreamTermination`, issue #90):
+What a bare end of stream means on an OpenAI-compatible endpoint. The formal
+wire terminators are `data: [DONE]` and a `finish_reason`-bearing chunk; a
+provider may additionally attest that its endpoint closes the connection only
+after the final chunk (`CleanEofCompletion`), letting a clean EOF complete a
+structurally finished response — at least one content block started, and every
+streamed tool call's accumulated arguments complete JSON. The undeclared
+default (`Strict`) treats any bare EOF as a dropped connection, and even under
+the declaration an unfinished response, a cut chunk, or a transport failure is
+never an inferred completion. An inferred completion reports `ToolUse` when
+the response contains tool calls and `Stop` otherwise, with no Raw Stop
+Reason.
+_Avoid_: EOF inference, silent completion
+
 **Context Overflow** (`ErrorKind::ContextOverflow`, `is_context_overflow`,
 issue #53):
 One classification over every provider signal that a request exceeded the

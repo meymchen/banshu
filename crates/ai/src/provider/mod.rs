@@ -307,6 +307,41 @@ pub enum OpenAiOutputTokenField {
     MaxCompletionTokens,
 }
 
+/// What a bare end of stream means on an OpenAI-compatible endpoint.
+///
+/// The OpenAI wire terminator is `data: [DONE]`, and a `finish_reason`-bearing
+/// chunk also terminates formally — some compatible servers close right after
+/// it without sending `[DONE]`. This policy answers only for an EOF with
+/// neither. Every provider states its own — nothing is inferred from a base
+/// URL or a model id.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenAiStreamTermination {
+    /// A bare EOF is a dropped connection, surfaced as an interrupted-stream
+    /// failure. The default, because an unconfigured endpoint attests
+    /// nothing.
+    #[default]
+    Strict,
+    /// The provider attests its endpoint closes the connection only after the
+    /// final chunk, so a clean EOF completes a structurally finished response
+    /// without `[DONE]` or `finish_reason`.
+    ///
+    /// Structural finish is checked before the attestation is trusted: at
+    /// least one content block must have started (an empty stream is no
+    /// response at all — indistinguishable from a drop before the first
+    /// chunk), and every streamed tool call's accumulated arguments must form
+    /// complete JSON (an argument-less call counts). Text and thinking carry
+    /// no wire terminator of their own, so a chunk cut mid-event stays the
+    /// protocol violation it already is, and a mid-stream transport failure
+    /// is never an inferred completion — both remain failures, declaration or
+    /// not.
+    ///
+    /// An inferred completion stops as [`StopReason::ToolUse`](crate::StopReason)
+    /// when the response contains tool calls and
+    /// [`StopReason::Stop`](crate::StopReason) otherwise, with no raw stop
+    /// reason — the wire carried none.
+    CleanEofCompletion,
+}
+
 /// Endpoint quirks declared by an OpenAI-compatible provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenAiCompat {
@@ -371,6 +406,9 @@ pub struct OpenAiCompat {
     /// Which standard output-token field carries the resolved Output Budget.
     /// Exactly the selected field is sent; the other is absent.
     pub output_token_field: OpenAiOutputTokenField,
+    /// What a bare end of stream means. See [`OpenAiStreamTermination`]; the
+    /// default requires a formal wire terminator.
+    pub stream_termination: OpenAiStreamTermination,
 }
 
 impl Default for OpenAiCompat {
@@ -387,6 +425,7 @@ impl Default for OpenAiCompat {
             reasoning_efforts: None,
             streamed_usage: true,
             output_token_field: OpenAiOutputTokenField::default(),
+            stream_termination: OpenAiStreamTermination::default(),
         }
     }
 }
