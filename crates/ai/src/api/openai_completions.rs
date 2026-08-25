@@ -17,8 +17,8 @@ use crate::http;
 use crate::observer::ObservationPlan;
 use crate::partial_json::{self, PartialArguments};
 use crate::provider::{
-    OpenAiCompat, OpenAiOutputTokenField, OpenAiPromptCaching, OpenAiReasoningFormat,
-    OpenAiStreamTermination,
+    OpenAiCacheRetention, OpenAiCompat, OpenAiOutputTokenField, OpenAiReasoningFormat,
+    OpenAiSessionAffinity, OpenAiStreamTermination,
 };
 use crate::types::{
     ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model,
@@ -41,8 +41,14 @@ impl ProtocolAdapter for OpenAiCompletions {
             .options
             .cache_retention
             .unwrap_or(CacheRetention::Short);
-        let session_headers = (request.openai_compat.prompt_caching
-            == OpenAiPromptCaching::SessionAffinityHeaders
+        // Session-affinity routing is declared as a closed policy: exactly the
+        // body field and headers the selected shape names carry the session
+        // id, and an undeclared endpoint gets none of them. The headers join
+        // at the lowest, protocol-default layer and share no name with any
+        // credential header, so routing can never add, remove, or rewrite
+        // the auth layers merged above it.
+        let session_headers = (request.openai_compat.session_affinity
+            == OpenAiSessionAffinity::SessionAffinityHeaders
             && cache_retention != CacheRetention::Disabled)
             .then(|| request.options.session_id.clone())
             .flatten();
@@ -712,8 +718,21 @@ fn build_request_body(
         .collect();
 
     let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
-    let openai_cache = compat.prompt_caching == OpenAiPromptCaching::OpenAi
-        && cache_retention != CacheRetention::Disabled;
+    let prompt_cache_key = (compat.session_affinity == OpenAiSessionAffinity::PromptCacheKey
+        && cache_retention != CacheRetention::Disabled)
+        .then(|| {
+            options
+                .session_id
+                .as_deref()
+                .map(clamp_openai_prompt_cache_key)
+        })
+        .flatten();
+    // The cache-routing preflight has already refused an explicit `Long` this
+    // provider did not attest, so a `Long` reaching here belongs to an
+    // endpoint that honours the declared retention field.
+    let prompt_cache_retention = (compat.cache_retention == OpenAiCacheRetention::Long
+        && cache_retention == CacheRetention::Long)
+        .then_some("24h");
 
     let reasoning = reasoning_wire(compat.reasoning_format, options.reasoning.as_ref());
 
@@ -737,16 +756,8 @@ fn build_request_body(
         temperature: options.temperature,
         max_tokens,
         max_completion_tokens,
-        prompt_cache_key: openai_cache
-            .then(|| {
-                options
-                    .session_id
-                    .as_deref()
-                    .map(clamp_openai_prompt_cache_key)
-            })
-            .flatten(),
-        prompt_cache_retention: (openai_cache && cache_retention == CacheRetention::Long)
-            .then_some("24h"),
+        prompt_cache_key,
+        prompt_cache_retention,
         thinking: reasoning.thinking,
         reasoning_effort: reasoning.effort,
         tool_choice: tool_choice_wire(options.tool_choice.as_ref()),

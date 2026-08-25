@@ -45,20 +45,62 @@ const DEEPSEEK_REASONING_EFFORTS: &[ReasoningEffort] = &[
 /// the baseline ladder.
 const NO_REASONING_EFFORTS: &[ReasoningEffort] = &[];
 
-/// Request-side prompt-cache controls supported by an OpenAI-compatible
-/// provider.
+/// The session-affinity routing shape an OpenAI-compatible endpoint accepts.
 ///
-/// Cache usage is parsed for every provider regardless of this setting. This
-/// only controls non-standard request fields or headers.
+/// A stable session id
+/// ([`StreamOptions::session_id`](crate::StreamOptions::session_id)) lets an
+/// endpoint route a conversation's traffic onto the same prompt cache. The
+/// policy is closed over the supported shapes: exactly the body field and
+/// headers the selected variant names receive the session id, and an
+/// undeclared endpoint receives none of them. Every provider states its own —
+/// nothing is inferred from a base URL or a model id.
+///
+/// Routing is a cache concern, so a
+/// [`Disabled`](crate::CacheRetention::Disabled) retention request suppresses
+/// it entirely. It never adds, removes, or rewrites credential headers — the
+/// routing fields below share no name with them, and they join the request at
+/// the lowest header layer, below every auth layer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum OpenAiPromptCaching {
-    /// The service manages caching automatically; send no cache extensions.
+pub enum OpenAiSessionAffinity {
+    /// Send no session-routing field or header. The default, because an
+    /// unconfigured endpoint attests nothing.
     #[default]
-    Automatic,
-    /// Send OpenAI's `prompt_cache_key` and optional 24-hour retention field.
-    OpenAi,
-    /// Send stable session-affinity headers when a session id is supplied.
+    None,
+    /// Route by OpenAI's `prompt_cache_key` request-body field, carrying the
+    /// session id clamped to the field's 64-character limit.
+    ///
+    /// Declared by [`Provider::openai`].
+    PromptCacheKey,
+    /// Route by the header trio `session_id`, `x-client-request-id`, and
+    /// `x-session-affinity`, each carrying the session id verbatim.
     SessionAffinityHeaders,
+}
+
+/// The prompt-cache retention an OpenAI-compatible endpoint accepts.
+///
+/// Declared independently from session affinity ([`OpenAiSessionAffinity`]):
+/// an endpoint may route cache traffic without accepting a retention field,
+/// and the two policies compose freely. Every provider states its own —
+/// nothing is inferred from a base URL or a model id.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenAiCacheRetention {
+    /// Only the endpoint's normal cache behavior. A
+    /// [`Short`](crate::CacheRetention::Short) request — or no retention
+    /// preference at all — goes out in the endpoint's normal shape, while an
+    /// explicit [`Long`](crate::CacheRetention::Long) request is refused
+    /// in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request. The default, because an unconfigured endpoint
+    /// attests nothing.
+    #[default]
+    Short,
+    /// The provider attests its endpoint honours OpenAI's
+    /// `prompt_cache_retention: "24h"` request field, so an explicit
+    /// [`Long`](crate::CacheRetention::Long) request emits it instead of
+    /// being refused.
+    ///
+    /// Declared by [`Provider::openai`].
+    Long,
 }
 
 /// The reasoning request shape an OpenAI-compatible endpoint accepts.
@@ -345,8 +387,14 @@ pub enum OpenAiStreamTermination {
 /// Endpoint quirks declared by an OpenAI-compatible provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenAiCompat {
-    /// Request-side prompt-cache controls.
-    pub prompt_caching: OpenAiPromptCaching,
+    /// The session-affinity routing shape this endpoint accepts. See
+    /// [`OpenAiSessionAffinity`]; the default sends no routing field or
+    /// header.
+    pub session_affinity: OpenAiSessionAffinity,
+    /// The prompt-cache retention this endpoint accepts. See
+    /// [`OpenAiCacheRetention`]; the default refuses an explicit
+    /// long-retention request before dispatch.
+    pub cache_retention: OpenAiCacheRetention,
     /// Every replayed assistant message must carry a `reasoning_content`
     /// field (`""` when it produced no thinking) while a reasoning model is
     /// active. DeepSeek requires this.
@@ -426,11 +474,13 @@ pub struct OpenAiCompat {
 
 impl Default for OpenAiCompat {
     /// The undeclared envelope: streamed usage is requested, `max_tokens`
-    /// carries the Output Budget, and tool history goes out without names or a
-    /// separator — the request shape bundled providers have always sent.
+    /// carries the Output Budget, tool history goes out without names or a
+    /// separator, and no cache-routing field or header is sent — the request
+    /// shape bundled providers have always sent.
     fn default() -> Self {
         Self {
-            prompt_caching: OpenAiPromptCaching::default(),
+            session_affinity: OpenAiSessionAffinity::default(),
+            cache_retention: OpenAiCacheRetention::default(),
             requires_reasoning_content_on_assistant_messages: false,
             reasoning_format: OpenAiReasoningFormat::default(),
             tool_choice: ToolChoiceSupport::default(),
@@ -607,7 +657,8 @@ impl Provider {
         self
     }
 
-    /// OpenAI — Chat Completions with explicit prompt-cache routing support.
+    /// OpenAI — Chat Completions with `prompt_cache_key` session affinity and
+    /// an attested 24-hour prompt-cache retention field.
     ///
     /// Reasoning: top-level `reasoning_effort`. Tool choice: all four choices,
     /// plus strict tool schemas.
@@ -619,7 +670,8 @@ impl Provider {
             ["OPENAI_API_KEY"],
         )
         .with_openai_compat(OpenAiCompat {
-            prompt_caching: OpenAiPromptCaching::OpenAi,
+            session_affinity: OpenAiSessionAffinity::PromptCacheKey,
+            cache_retention: OpenAiCacheRetention::Long,
             reasoning_format: OpenAiReasoningFormat::ReasoningEffort,
             tool_choice: ToolChoiceSupport::ALL,
             strict_tool_schemas: true,
