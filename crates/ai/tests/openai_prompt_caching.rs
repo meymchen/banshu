@@ -4,7 +4,8 @@
 //! DeepSeek, OpenRouter-style endpoints, and Moonshot.
 
 use banshu_ai::{
-    CacheRetention, Context, Model, ModelCost, OpenAiPromptCaching, Provider, StreamOptions,
+    CacheRetention, Context, Model, ModelCost, OpenAiCompat, OpenAiPromptCaching, Provider,
+    StreamOptions,
 };
 use serde_json::Value;
 use wiremock::matchers::{method, path};
@@ -154,7 +155,10 @@ async fn sends_openai_cache_key_and_long_retention_when_declared() {
     .await;
 
     let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"])
-        .with_openai_prompt_caching(OpenAiPromptCaching::OpenAi);
+        .with_openai_compat(OpenAiCompat {
+            prompt_caching: OpenAiPromptCaching::OpenAi,
+            ..OpenAiCompat::default()
+        });
     let long_session_id = "x".repeat(80);
     let options = StreamOptions {
         cache_retention: Some(CacheRetention::Long),
@@ -186,7 +190,10 @@ async fn generic_or_disabled_providers_send_no_openai_cache_extensions() {
         .await;
 
         let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"])
-            .with_openai_prompt_caching(caching);
+            .with_openai_compat(OpenAiCompat {
+                prompt_caching: caching,
+                ..OpenAiCompat::default()
+            });
         let options = StreamOptions {
             cache_retention: Some(retention),
             session_id: Some("conversation-42".into()),
@@ -214,7 +221,10 @@ async fn sends_session_affinity_headers_only_when_enabled() {
     .await;
 
     let provider = Provider::openai_compatible("custom", "Custom", server.uri(), ["X"])
-        .with_openai_prompt_caching(OpenAiPromptCaching::SessionAffinityHeaders);
+        .with_openai_compat(OpenAiCompat {
+            prompt_caching: OpenAiPromptCaching::SessionAffinityHeaders,
+            ..OpenAiCompat::default()
+        });
     let options = StreamOptions {
         session_id: Some("conversation-42".into()),
         ..options()
