@@ -319,7 +319,24 @@ impl Parser {
 mod tests {
     //! The parser is `pub(crate)`, so its coverage matrix lives inline.
     use super::*;
+    use proptest::prelude::*;
     use serde_json::json;
+
+    fn json_value() -> impl Strategy<Value = Value> {
+        let leaf = prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(|number| json!(number)),
+            ".{0,32}".prop_map(Value::String),
+        ];
+        leaf.prop_recursive(4, 64, 8, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..8).prop_map(Value::Array),
+                prop::collection::btree_map("[a-zA-Z0-9_]{0,16}", inner, 0..8)
+                    .prop_map(|entries| Value::Object(entries.into_iter().collect())),
+            ]
+        })
+    }
 
     fn complete(raw: &str) -> Value {
         match parse(raw) {
@@ -347,6 +364,34 @@ mod tests {
             PartialArguments::Complete(_) => "Complete",
             PartialArguments::Partial(_) => "Partial",
             PartialArguments::Invalid => "Invalid",
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn property_completed_valid_json_preserves_serde_semantics(expected in json_value()) {
+            let raw = serde_json::to_string(&expected).expect("generated JSON serializes");
+            match parse(&raw) {
+                PartialArguments::Complete(actual) => prop_assert_eq!(actual, expected),
+                outcome => prop_assert!(false, "valid JSON returned {}", kind(outcome)),
+            }
+        }
+
+        #[test]
+        fn property_arbitrary_fragments_never_panic_and_snapshots_are_valid_json(
+            fragment in prop::collection::vec(any::<char>(), 0..512),
+        ) {
+            let fragment: String = fragment.into_iter().collect();
+            match parse(&fragment) {
+                PartialArguments::Complete(value) | PartialArguments::Partial(value) => {
+                    let snapshot = serde_json::to_string(&value)
+                        .expect("every snapshot remains serializable JSON");
+                    prop_assert!(matches!(parse(&snapshot), PartialArguments::Complete(_)));
+                }
+                PartialArguments::Invalid => {}
+            }
         }
     }
 

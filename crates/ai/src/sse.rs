@@ -35,14 +35,19 @@ pub(crate) enum SseError {
 ///
 /// Feed raw bytes via [`push`](Self::push) as they arrive; a line or a
 /// multi-byte UTF-8 character split across a chunk boundary is buffered until
-/// whole (line splitting happens on the `\n` byte, which never occurs inside a
-/// multi-byte UTF-8 sequence, so decoding a complete line is always safe).
+/// whole (line splitting happens on ASCII `\r` / `\n` bytes, which never occur
+/// inside a multi-byte UTF-8 sequence, so decoding a complete line is always
+/// safe).
 /// Call [`finish`](Self::finish) once at EOF to flush a final event that had
 /// no trailing blank line.
 #[derive(Debug, Default)]
 pub(crate) struct SseDecoder {
-    /// Bytes since the last complete line (no trailing `\n` seen yet).
+    /// Bytes since the last complete line (no line delimiter seen yet).
     pending_line: Vec<u8>,
+    /// A chunk ended immediately after a bare `\r` delimiter. If the next
+    /// chunk begins with `\n`, it completes that same CRLF delimiter rather
+    /// than representing a second blank line.
+    discard_leading_lf: bool,
     /// `event:` field for the event currently being assembled.
     event: Option<String>,
     /// `data:` lines for the event currently being assembled, joined on flush.
@@ -74,6 +79,15 @@ impl SseDecoder {
         if let Some(err) = self.pending_error.take() {
             return Err(err);
         }
+        let chunk = if self.discard_leading_lf && chunk.first() == Some(&b'\n') {
+            self.discard_leading_lf = false;
+            &chunk[1..]
+        } else {
+            if !chunk.is_empty() {
+                self.discard_leading_lf = false;
+            }
+            chunk
+        };
         self.pending_line.extend_from_slice(chunk);
         let mut events = Vec::new();
         // Scan forward with a cursor and drain the consumed prefix once at the
@@ -83,15 +97,20 @@ impl SseDecoder {
         let mut consumed = 0;
         while let Some(rel_pos) = self.pending_line[consumed..]
             .iter()
-            .position(|&b| b == b'\n')
+            .position(|&byte| matches!(byte, b'\r' | b'\n'))
         {
-            let newline_pos = consumed + rel_pos;
-            let mut end = newline_pos;
-            if end > consumed && self.pending_line[end - 1] == b'\r' {
-                end -= 1;
+            let delimiter_pos = consumed + rel_pos;
+            let line =
+                String::from_utf8_lossy(&self.pending_line[consumed..delimiter_pos]).into_owned();
+            let delimiter = self.pending_line[delimiter_pos];
+            consumed = delimiter_pos + 1;
+            if delimiter == b'\r' {
+                if self.pending_line.get(consumed) == Some(&b'\n') {
+                    consumed += 1;
+                } else if consumed == self.pending_line.len() {
+                    self.discard_leading_lf = true;
+                }
             }
-            let line = String::from_utf8_lossy(&self.pending_line[consumed..end]).into_owned();
-            consumed = newline_pos + 1;
             match self.process_line(&line) {
                 Ok(Some(event)) => events.push(event),
                 Ok(None) => {}
@@ -178,6 +197,8 @@ impl SseDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use proptest::test_runner::TestCaseResult;
 
     /// Push a whole payload in one shot and flush EOF, returning all events.
     fn decode_all(input: &[u8]) -> Vec<SseEvent> {
@@ -185,6 +206,138 @@ mod tests {
         let mut events = decoder.push(input).expect("push");
         events.extend(decoder.finish().expect("finish"));
         events
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum LineEnding {
+        Lf,
+        CrLf,
+        Cr,
+    }
+
+    impl LineEnding {
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::Lf => "\n",
+                Self::CrLf => "\r\n",
+                Self::Cr => "\r",
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct EventFixture {
+        event: Option<String>,
+        data_lines: Vec<String>,
+        line_ending: LineEnding,
+        include_comment: bool,
+    }
+
+    fn event_fixture() -> impl Strategy<Value = EventFixture> {
+        (
+            prop::option::of("[a-z_]{0,12}"),
+            prop::collection::vec("[ -~]{0,24}", 1..5),
+            prop_oneof![
+                Just(LineEnding::Lf),
+                Just(LineEnding::CrLf),
+                Just(LineEnding::Cr),
+            ],
+            any::<bool>(),
+        )
+            .prop_map(
+                |(event, data_lines, line_ending, include_comment)| EventFixture {
+                    event,
+                    data_lines,
+                    line_ending,
+                    include_comment,
+                },
+            )
+    }
+
+    fn assert_event_data_is_bounded(events: &[SseEvent]) -> TestCaseResult {
+        prop_assert!(
+            events
+                .iter()
+                .all(|event| event.data.len() <= MAX_EVENT_DATA_BYTES)
+        );
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn property_decoding_is_independent_of_chunk_boundaries_and_line_endings(
+            events in prop::collection::vec(event_fixture(), 0..16),
+            chunk_sizes in prop::collection::vec(1_usize..32, 0..64),
+        ) {
+            let mut wire = String::new();
+            let mut expected = Vec::new();
+            for fixture in events {
+                let ending = fixture.line_ending.as_str();
+                if fixture.include_comment {
+                    wire.push_str(": provider keep-alive");
+                    wire.push_str(ending);
+                }
+                if let Some(event) = &fixture.event {
+                    wire.push_str("event: ");
+                    wire.push_str(event);
+                    wire.push_str(ending);
+                }
+                for data in &fixture.data_lines {
+                    wire.push_str("data: ");
+                    wire.push_str(data);
+                    wire.push_str(ending);
+                }
+                wire.push_str(ending);
+                expected.push(SseEvent {
+                    event: fixture.event,
+                    data: fixture.data_lines.join("\n"),
+                });
+            }
+
+            let bytes = wire.as_bytes();
+            let mut decoder = SseDecoder::new();
+            let mut actual = Vec::new();
+            let mut offset = 0;
+            for size in chunk_sizes {
+                if offset == bytes.len() {
+                    break;
+                }
+                let end = (offset + size).min(bytes.len());
+                actual.extend(decoder.push(&bytes[offset..end]).expect("bounded valid SSE"));
+                offset = end;
+            }
+            actual.extend(decoder.push(&bytes[offset..]).expect("remaining valid SSE"));
+            actual.extend(decoder.finish().expect("finish valid SSE"));
+
+            prop_assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn property_bounded_arbitrary_input_never_panics_or_emits_oversized_data(
+            input in prop::collection::vec(any::<u8>(), 0..4096),
+            chunk_sizes in prop::collection::vec(1_usize..128, 0..64),
+        ) {
+            let mut decoder = SseDecoder::new();
+            let mut offset = 0;
+            for size in chunk_sizes {
+                if offset == input.len() {
+                    break;
+                }
+                let end = (offset + size).min(input.len());
+                if let Ok(events) = decoder.push(&input[offset..end]) {
+                    assert_event_data_is_bounded(&events)?;
+                }
+                offset = end;
+            }
+            if let Ok(events) = decoder.push(&input[offset..]) {
+                assert_event_data_is_bounded(&events)?;
+            }
+            if let Ok(events) = decoder.finish() {
+                assert_event_data_is_bounded(&events)?;
+            }
+        }
     }
 
     #[test]
@@ -220,6 +373,18 @@ mod tests {
                     data: "world".to_string()
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn bare_cr_separated_event_is_decoded_without_leaking_the_delimiter() {
+        let events = decode_all(b"data:\r\r");
+        assert_eq!(
+            events,
+            vec![SseEvent {
+                event: None,
+                data: String::new(),
+            }]
         );
     }
 
@@ -284,6 +449,20 @@ mod tests {
         let mut events = decoder.push(b"data: hel").expect("push first");
         assert!(events.is_empty());
         events.extend(decoder.push(b"lo\n\n").expect("push second"));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "hello");
+    }
+
+    #[test]
+    fn crlf_split_across_pushes_is_one_delimiter() {
+        let mut decoder = SseDecoder::new();
+        assert!(
+            decoder
+                .push(b"data: hello\r")
+                .expect("first push")
+                .is_empty()
+        );
+        let events = decoder.push(b"\n\r\n").expect("second push");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].data, "hello");
     }

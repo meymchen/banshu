@@ -184,11 +184,13 @@ fn repair_tool_history(context: &mut Context) {
                     .iter()
                     .filter_map(|content| match content {
                         AssistantContent::ToolCall(call) if !answered.contains(&call.id) => {
-                            Some(Message::ToolResult(ToolResultMessage::error_text(
+                            let mut result = ToolResultMessage::error_text(
                                 call.id.clone(),
                                 call.name.clone(),
                                 NO_RESULT_PROVIDED,
-                            )))
+                            );
+                            result.timestamp = assistant.timestamp;
+                            Some(Message::ToolResult(result))
                         }
                         _ => None,
                     })
@@ -419,6 +421,7 @@ mod tests {
         AssistantContent, AssistantMessage, ImageContent, Message, StopReason, ThinkingContent,
         ToolCall, ToolResultMessage, UserMessage,
     };
+    use proptest::prelude::*;
 
     fn text(text: &str) -> UserContent {
         UserContent::Text(TextContent {
@@ -608,6 +611,21 @@ mod tests {
         assert!(!existing.is_error);
         assert_eq!(existing.content, [text("72F")]);
         assert_eq!(context, before, "the caller's context is untouched");
+    }
+
+    #[test]
+    fn synthetic_tool_result_uses_the_issuing_turn_timestamp() {
+        let mut issuing_turn = AssistantMessage::from_content(vec![tool_call("call_1", "read")]);
+        issuing_turn.timestamp = 1_234;
+        let context = Context::new()
+            .with_message(Message::Assistant(Box::new(issuing_turn)))
+            .user("and now?");
+
+        let normalized = normalize(&image_model(), &context).expect("repair never fails");
+        let Message::ToolResult(synthetic) = &normalized.context.messages[1] else {
+            panic!("synthetic result follows the issuing turn")
+        };
+        assert_eq!(synthetic.timestamp, 1_234);
     }
 
     #[test]
@@ -935,6 +953,82 @@ mod tests {
                 id, "read", "done",
             )))
             .user("and now?")
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn property_normalization_is_immutable_deterministic_consistent_and_idempotent(
+            id in prop::collection::vec(any::<char>(), 0..128),
+            historical_content in prop::collection::vec(
+                prop_oneof![
+                    ".{0,24}".prop_map(|body| UserContent::Text(TextContent {
+                        text: body,
+                        signature: None,
+                    })),
+                    Just(image()),
+                ],
+                0..8,
+            ),
+            thinking in ".{0,32}",
+            signature in prop::option::of(".{0,24}"),
+            redacted in any::<bool>(),
+            same_provenance in any::<bool>(),
+            has_result in any::<bool>(),
+        ) {
+            let id: String = id.into_iter().collect();
+            let (api, provider, model) = if same_provenance {
+                ("openai-completions", "provider-a", "model-a")
+            } else {
+                ("anthropic-messages", "provider-b", "model-b")
+            };
+            let mut context = Context::new()
+                .with_message(user(historical_content))
+                .with_message(assistant_from(
+                    api,
+                    provider,
+                    model,
+                    vec![
+                        thinking_block(&thinking, signature.as_deref(), redacted),
+                        tool_call(&id, "read"),
+                    ],
+                ));
+            if has_result {
+                context = context.with_message(Message::ToolResult(ToolResultMessage::text(
+                    &id, "read", "done",
+                )));
+            }
+            context = context.user("and now?");
+            let before = context.clone();
+
+            let once = normalize(&target_model(), &context).expect("generated text-only history");
+            let repeated = normalize(&target_model(), &context).expect("same input normalizes");
+            let twice = normalize(&target_model(), &once.context).expect("normalized input normalizes");
+
+            prop_assert_eq!(&context, &before, "the caller's input remains immutable");
+            prop_assert_eq!(&once.context, &repeated.context, "output is deterministic");
+            prop_assert_eq!(&once.diagnostics, &repeated.diagnostics, "diagnostics are deterministic");
+
+            let call_id = once.context.messages.iter().find_map(|message| match message {
+                Message::Assistant(assistant) => assistant.content.iter().find_map(|content| {
+                    match content {
+                        AssistantContent::ToolCall(call) => Some(call.id.as_str()),
+                        _ => None,
+                    }
+                }),
+                _ => None,
+            }).expect("the tool call survives normalization");
+            let result_id = once.context.messages.iter().find_map(|message| match message {
+                Message::ToolResult(result) => Some(result.tool_call_id.as_str()),
+                _ => None,
+            }).expect("an existing or repaired result answers the call");
+            prop_assert_eq!(call_id, result_id, "tool result still answers its call");
+            prop_assert!(is_valid_tool_call_id(call_id), "normalized id is protocol-safe: {call_id:?}");
+
+            prop_assert_eq!(&twice.context, &once.context, "normalization is idempotent");
+            prop_assert!(twice.diagnostics.is_empty(), "no second-pass changes remain");
+        }
     }
 
     #[test]

@@ -318,6 +318,135 @@ pub(crate) async fn resolve_for_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn layer_strategy() -> impl Strategy<Value = Vec<Option<(bool, Option<String>)>>> {
+        prop::collection::vec(
+            prop::option::of((any::<bool>(), prop::option::of("[a-zA-Z0-9._-]{0,24}"))),
+            0..8,
+        )
+    }
+
+    fn apply_ascii_casing(name: &str, casing: &[bool]) -> String {
+        name.chars()
+            .enumerate()
+            .map(|(index, character)| {
+                if casing.get(index).copied().unwrap_or(false) {
+                    character.to_ascii_uppercase()
+                } else {
+                    character.to_ascii_lowercase()
+                }
+            })
+            .collect()
+    }
+
+    fn sensitive_header_name() -> impl Strategy<Value = String> {
+        let exact = prop::sample::select(vec![
+            "authorization",
+            "proxy-authorization",
+            "cookie",
+            "set-cookie",
+            "x-auth-token",
+            "access-token",
+            "refresh-token",
+            "id-token",
+            "client-secret",
+        ]);
+        let compact_family = (
+            "[a-z]{0,8}",
+            prop::sample::select(vec![
+                ("api", "key"),
+                ("access", "token"),
+                ("refresh", "token"),
+                ("client", "secret"),
+            ]),
+            prop::sample::select(vec!["", "-", "_", "."]),
+        )
+            .prop_map(|(prefix, (first, second), separator)| {
+                format!("{prefix}{first}{separator}{second}")
+            });
+        (
+            prop_oneof![exact.prop_map(str::to_string), compact_family],
+            prop::collection::vec(any::<bool>(), 0..32),
+        )
+            .prop_map(|(name, casing)| apply_ascii_casing(&name, &casing))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn property_header_merge_has_deterministic_case_insensitive_precedence(
+            generated_layers in prop::collection::vec(layer_strategy(), 0..6),
+        ) {
+            let layers: Vec<ProviderHeaders> = generated_layers
+                .iter()
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, entry)| {
+                            entry.as_ref().map(|(uppercase, value)| {
+                                let canonical = format!("x-layer-{index}");
+                                let name = if *uppercase {
+                                    canonical.to_ascii_uppercase()
+                                } else {
+                                    canonical
+                                };
+                                (name, value.clone())
+                            })
+                        })
+                        .collect()
+                })
+                .collect();
+            let refs: Vec<&ProviderHeaders> = layers.iter().collect();
+
+            let actual = merge_header_layers(refs.iter().copied());
+            let repeated = merge_header_layers(refs.iter().copied());
+            prop_assert_eq!(&actual, &repeated, "the same layers always merge identically");
+
+            for index in 0..8 {
+                let winning = layers.iter().rev().find_map(|layer| {
+                    layer.iter().find_map(|(name, value)| {
+                        name.eq_ignore_ascii_case(&format!("x-layer-{index}"))
+                            .then_some((name, value))
+                    })
+                });
+                match winning {
+                    Some((name, Some(value))) => {
+                        prop_assert_eq!(actual.get(name), Some(&Some(value.clone())));
+                        prop_assert_eq!(
+                            actual.keys().filter(|candidate| candidate.eq_ignore_ascii_case(name)).count(),
+                            1,
+                            "only the winning casing survives",
+                        );
+                    }
+                    Some((_, None)) | None => {
+                        prop_assert!(
+                            actual.keys().all(|name| !name.eq_ignore_ascii_case(&format!("x-layer-{index}"))),
+                            "a deletion or absent header leaves no value",
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn property_every_sensitive_header_family_redacts_arbitrary_secret_values(
+            name in sensitive_header_name(),
+            secret_payload in prop::collection::vec(any::<char>(), 0..64),
+        ) {
+            prop_assert!(is_sensitive_header_name(&name), "generated family must be classified: {name}");
+            let secret = format!("TOP-SECRET<{}>-END", secret_payload.into_iter().collect::<String>());
+            let lower = ProviderHeaders::from([(name.to_ascii_lowercase(), Some("superseded-secret".to_string()))]);
+            let higher = ProviderHeaders::from([(name, Some(secret.clone()))]);
+            let merged = merge_header_layers([&lower, &higher]);
+            let debug = format!("{:?}", RedactedHeaders(&merged));
+            prop_assert!(!debug.contains(&secret), "secret leaked through header diagnostics");
+            prop_assert!(!debug.contains("superseded-secret"), "lower-priority secret leaked");
+            prop_assert!(debug.contains("[REDACTED]"));
+        }
+    }
 
     struct StaticResolver(&'static str);
 
