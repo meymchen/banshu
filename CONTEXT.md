@@ -221,6 +221,23 @@ unaffected. Kimi and MiniMax declare both, keeping the cache shape they have
 always sent; the undeclared defaults attest nothing.
 _Avoid_: cache quirks, TTL guessing
 
+**Anthropic temperature policy** (`AnthropicCompat::temperature`,
+`AnthropicTemperature`, issue #95):
+The `temperature` support an Anthropic-compatible provider declares its
+endpoint accepts, independent of its reasoning request shape. An explicit
+temperature is either sent faithfully or refused before any HTTP request —
+never silently dropped. `Unsupported` — the default — refuses every explicit
+temperature in-band with `InvalidRequest`; `WithoutReasoning` sends it
+exactly as given except alongside an enabled reasoning request, which it
+refuses (an explicit `Off` disables reasoning outright and is no
+combination); `WithReasoning` sends it alongside every reasoning shape the
+provider declares. An omitted temperature leaves the request shape
+untouched. MiniMax declares `WithReasoning` — its Anthropic-compatible
+reference marks temperature fully supported and names no thinking
+restriction — while Kimi declares nothing, publishing no parameter-level
+reference for its coding endpoint.
+_Avoid_: sampling quirks, temperature guessing
+
 **Context Overflow** (`ErrorKind::ContextOverflow`, `is_context_overflow`,
 issue #53):
 One classification over every provider signal that a request exceeded the

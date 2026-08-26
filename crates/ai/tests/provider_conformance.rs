@@ -7,10 +7,10 @@
 use std::sync::{Arc, Mutex};
 
 use banshu_ai::{
-    AnthropicCacheRetention, AnthropicReasoningFormat, ApiKind, InMemoryCredentialStore,
-    MiniMaxRegion, OpenAiCacheRetention, OpenAiOutputTokenField, OpenAiReasoningFormat,
-    OpenAiSessionAffinity, OpenAiStreamTermination, Provider, ReasoningEffort, ToolChoice,
-    ToolChoiceSupport,
+    AnthropicCacheRetention, AnthropicReasoningFormat, AnthropicTemperature, ApiKind,
+    InMemoryCredentialStore, MiniMaxRegion, OpenAiCacheRetention, OpenAiOutputTokenField,
+    OpenAiReasoningFormat, OpenAiSessionAffinity, OpenAiStreamTermination, Provider,
+    ReasoningEffort, ToolChoice, ToolChoiceSupport,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -27,6 +27,7 @@ struct ProviderExpectation {
     anthropic_reasoning: AnthropicReasoningFormat,
     anthropic_cache_retention: AnthropicCacheRetention,
     anthropic_tool_cache: bool,
+    anthropic_temperature: AnthropicTemperature,
     efforts: Option<&'static [ReasoningEffort]>,
     tool_choice: ToolChoiceSupport,
     strict_tools: bool,
@@ -46,6 +47,7 @@ fn providers() -> [ProviderExpectation; 7] {
             anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
             anthropic_cache_retention: AnthropicCacheRetention::Short,
             anthropic_tool_cache: false,
+            anthropic_temperature: AnthropicTemperature::Unsupported,
             efforts: Some(&[
                 ReasoningEffort::Off,
                 ReasoningEffort::Low,
@@ -72,6 +74,7 @@ fn providers() -> [ProviderExpectation; 7] {
             anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
             anthropic_cache_retention: AnthropicCacheRetention::Short,
             anthropic_tool_cache: false,
+            anthropic_temperature: AnthropicTemperature::Unsupported,
             efforts: None,
             tool_choice: ToolChoiceSupport {
                 auto: true,
@@ -91,6 +94,7 @@ fn providers() -> [ProviderExpectation; 7] {
             anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
             anthropic_cache_retention: AnthropicCacheRetention::Short,
             anthropic_tool_cache: false,
+            anthropic_temperature: AnthropicTemperature::Unsupported,
             efforts: Some(&[]),
             tool_choice: ToolChoiceSupport::ALL,
             strict_tools: true,
@@ -107,6 +111,7 @@ fn providers() -> [ProviderExpectation; 7] {
             anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
             anthropic_cache_retention: AnthropicCacheRetention::Short,
             anthropic_tool_cache: false,
+            anthropic_temperature: AnthropicTemperature::Unsupported,
             efforts: None,
             tool_choice: ToolChoiceSupport {
                 auto: true,
@@ -126,6 +131,7 @@ fn providers() -> [ProviderExpectation; 7] {
             anthropic_reasoning: AnthropicReasoningFormat::ThinkingToggle,
             anthropic_cache_retention: AnthropicCacheRetention::Long,
             anthropic_tool_cache: true,
+            anthropic_temperature: AnthropicTemperature::Unsupported,
             efforts: None,
             tool_choice: ToolChoiceSupport::NONE,
             strict_tools: false,
@@ -147,6 +153,7 @@ fn providers() -> [ProviderExpectation; 7] {
             anthropic_reasoning: AnthropicReasoningFormat::ThinkingAdaptive,
             anthropic_cache_retention: AnthropicCacheRetention::Long,
             anthropic_tool_cache: true,
+            anthropic_temperature: AnthropicTemperature::WithReasoning,
             efforts: None,
             tool_choice: ToolChoiceSupport::ALL,
             strict_tools: false,
@@ -165,6 +172,7 @@ fn providers() -> [ProviderExpectation; 7] {
             anthropic_reasoning: AnthropicReasoningFormat::ThinkingAdaptive,
             anthropic_cache_retention: AnthropicCacheRetention::Long,
             anthropic_tool_cache: true,
+            anthropic_temperature: AnthropicTemperature::WithReasoning,
             efforts: None,
             tool_choice: ToolChoiceSupport::ALL,
             strict_tools: false,
@@ -228,6 +236,14 @@ fn bundled_providers_match_the_frozen_matrix() {
         assert_eq!(
             anthropic.tool_cache_control, expected.anthropic_tool_cache,
             "{}: anthropic tool cache control",
+            expected.id,
+        );
+        // Anthropic temperature declarations: MiniMax attests temperature
+        // alongside every reasoning shape it declares; every other provider
+        // keeps the undeclared default, which refuses an explicit one.
+        assert_eq!(
+            anthropic.temperature, expected.anthropic_temperature,
+            "{}: anthropic temperature",
             expected.id,
         );
         let (actual_efforts, actual_tool_choice, actual_strict) = match expected.api {

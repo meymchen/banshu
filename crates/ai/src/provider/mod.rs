@@ -131,6 +131,41 @@ pub enum AnthropicCacheRetention {
     Long,
 }
 
+/// The `temperature` support an Anthropic-compatible endpoint accepts.
+///
+/// Declared independently from the reasoning request shape
+/// ([`AnthropicCompat::reasoning_format`]): an endpoint may accept a
+/// `temperature` request field without accepting one alongside an enabled
+/// `thinking` request — Anthropic's own extended-thinking reference fixes
+/// sampling while thinking runs — and the two policies compose freely. Every
+/// provider states its own — nothing is inferred from a base URL or a model
+/// id.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnthropicTemperature {
+    /// The endpoint takes no `temperature` request field. An explicit
+    /// temperature is refused in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request — never silently dropped to make the request
+    /// succeed. An omitted temperature leaves the payload untouched either
+    /// way. The default, because an unconfigured endpoint attests nothing.
+    #[default]
+    Unsupported,
+    /// The endpoint accepts `temperature`, but not alongside an enabled
+    /// reasoning request — the pairing its reference rules out. An explicit
+    /// temperature on a request with no reasoning option, or with
+    /// [`ReasoningEffort::Off`](crate::ReasoningEffort) (which disables
+    /// reasoning outright), goes out exactly as given; one alongside an
+    /// enabled reasoning request is refused in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request.
+    WithoutReasoning,
+    /// The endpoint accepts `temperature` alongside every reasoning shape it
+    /// declares. An explicit temperature always goes out exactly as given.
+    ///
+    /// Declared by [`Provider::minimax`].
+    WithReasoning,
+}
+
 /// A documented token-budget keyword accepted by open-model chat templates.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -639,6 +674,11 @@ pub struct AnthropicCompat {
     pub tool_cache_control: bool,
     /// The reasoning request shape this endpoint accepts.
     pub reasoning_format: AnthropicReasoningFormat,
+    /// The `temperature` support this endpoint accepts. See
+    /// [`AnthropicTemperature`]; the default refuses an explicit temperature
+    /// before dispatch rather than sending it to an endpoint that might
+    /// ignore or reject it.
+    pub temperature: AnthropicTemperature,
     /// The tool choices this endpoint accepts in a request. See
     /// [`OpenAiCompat::tool_choice`] — the rule is the same on both
     /// protocols; only the wire spelling differs.
@@ -893,6 +933,10 @@ impl Provider {
     /// all four choices are declared; strict tool schemas appear nowhere in
     /// it, so they are not.
     ///
+    /// Sampling: the reference marks `temperature` fully supported and names
+    /// no restriction against combining it with thinking, so it is declared
+    /// alongside every reasoning shape above.
+    ///
     /// Caching: the one-hour cache-control TTL and tool-definition
     /// breakpoints are declared, keeping the cache shape this provider has
     /// always sent.
@@ -907,6 +951,7 @@ impl Provider {
             cache_retention: AnthropicCacheRetention::Long,
             tool_cache_control: true,
             reasoning_format: AnthropicReasoningFormat::ThinkingAdaptive,
+            temperature: AnthropicTemperature::WithReasoning,
             tool_choice: ToolChoiceSupport::ALL,
             ..AnthropicCompat::default()
         })
@@ -968,7 +1013,8 @@ impl Provider {
     ///
     /// Tool choice: none declared — Kimi publishes no parameter-level
     /// reference for the coding endpoint's Anthropic shape, so an explicit
-    /// choice is refused rather than sent on a guess.
+    /// choice is refused rather than sent on a guess. Sampling is the same:
+    /// no temperature support is declared either.
     ///
     /// Caching: the one-hour cache-control TTL and tool-definition
     /// breakpoints are declared, keeping the cache shape this provider has
