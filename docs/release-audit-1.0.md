@@ -28,14 +28,15 @@ cargo test -p xtask --test release_package
 cargo deny --all-features check licenses
 cargo semver-checks check-release -p banshu-ai --baseline-version 0.9.0 --all-features --release-type minor
 cargo publish --dry-run -p banshu-ai --all-features
-cargo test --manifest-path target/package/banshu-ai-1.0.0/Cargo.toml --all-features
+cargo run -p xtask -- verify-release-package
 ```
 
 The final command runs the minimum, OAuth, and custom-provider README doctests
 and the direct `Context` fixture test from Cargo's unpacked `.crate`, not from
 the workspace source tree. The Linux and Windows test matrix, MSRV check,
 warning-denied docs, license review, semver review, archive-content test, and
-publish dry run are enforced by
+publish dry run are centralized in
+[`action.yml`](../.github/actions/release-package/action.yml) and enforced by
 [`ci.yml`](../.github/workflows/ci.yml). The same package gates run before the
 publication job in [`release-plz.yml`](../.github/workflows/release-plz.yml).
 
