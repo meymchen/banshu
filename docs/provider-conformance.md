@@ -19,7 +19,38 @@ Sampling on the Anthropic-compatible rows: MiniMax declares `temperature`
 alongside every reasoning shape it declares (its reference marks it fully
 supported and names no thinking restriction); Kimi declares none, so an
 explicit temperature is refused before dispatch. OpenAI-compatible sampling
-parameters are sent as given today and are not part of this matrix yet.
+parameters use the caller-owned `StreamOptions::sampling` map and therefore
+are not bundled-provider declarations.
+
+## Complete compatibility declarations
+
+The following values pin every public compatibility field, including fields
+that do not affect the summary above. “Default” means the complete value shown
+here, not an unspecified value:
+
+- `OpenAiCompat::default()` is session affinity `None`, cache retention
+  `Short`, no required assistant `reasoning_content`, reasoning format
+  `Unsupported`, no tool choices, non-strict tool schemas, no provider effort
+  vocabulary, streamed usage enabled, output token field `MaxTokens`, stream
+  termination `Strict`, no tool-result names, and no empty assistant separator.
+- `AnthropicCompat::default()` disallows empty thinking signatures, sends no
+  session-affinity header, has cache retention `Short`, no tool-definition
+  cache control, reasoning format `Unsupported`, temperature `Unsupported`, no
+  tool choices, non-strict tool schemas, and no provider effort vocabulary.
+
+| Provider | Complete OpenAI compatibility | Complete Anthropic compatibility |
+| --- | --- | --- |
+| DeepSeek | Default except required assistant `reasoning_content`; `ThinkingToggle`; efforts `off`, `low`, `high`, `max`; tool choice `auto`/`none` | Default |
+| Z.AI | Default except `ThinkingToggleOnly`; tool choice `auto` | Default |
+| Moonshot AI | Default except an explicitly empty effort vocabulary; all tool choices; strict tool schemas | Default |
+| Xiaomi MiMo | Default except `ThinkingToggleOnly`; tool choice `auto`; strict tool schemas | Default |
+| Kimi For Coding | Default | Default except cache retention `Long`; tool-definition cache control enabled; `ThinkingToggle` |
+| MiniMax Global | Default | Default except cache retention `Long`; tool-definition cache control enabled; `ThinkingAdaptive`; temperature `WithReasoning`; all tool choices |
+| MiniMax CN | Default | Default except cache retention `Long`; tool-definition cache control enabled; `ThinkingAdaptive`; temperature `WithReasoning`; all tool choices |
+
+`crates/ai/tests/provider_conformance.rs` compares each complete struct value,
+so adding a compatibility field or changing a bundled declaration fails the
+frozen matrix until this table and its expectation are deliberately updated.
 
 ## Automated evidence
 
@@ -66,6 +97,17 @@ Every fixed promise above is exercised without live credentials:
   connection; declared clean-EOF completion and its failure modes):
   `crates/ai/tests/provider_conformance.rs` and
   `crates/ai/tests/openai_completions_termination.rs`.
+- OpenAI-compatible tool-history declarations (every bundled provider keeps
+  names and separators disabled): `crates/ai/tests/provider_conformance.rs`
+  and `crates/ai/tests/openai_tool_history.rs`.
+- OpenAI-compatible sampling controls and reserved-key protection:
+  `crates/ai/tests/openai_sampling.rs`.
+- Observer/wire equality after cache, sampling, combined reasoning/temperature,
+  and header transforms: `crates/ai/tests/openai_prompt_caching.rs`,
+  `crates/ai/tests/openai_sampling.rs`, and
+  `crates/ai/tests/anthropic_temperature.rs`. These compare the observer's
+  redacted payload and headers with the final values recorded by local HTTP
+  servers; credentials are asserted present only on the wire.
 
 Tool calling and image input themselves are explicitly model dependent. Their
 catalog attestations are covered by `crates/ai/tests/model_capabilities.rs`;
