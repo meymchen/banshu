@@ -68,8 +68,6 @@ pub enum OpenAiSessionAffinity {
     None,
     /// Route by OpenAI's `prompt_cache_key` request-body field, carrying the
     /// session id clamped to the field's 64-character limit.
-    ///
-    /// Declared by [`Provider::openai`].
     PromptCacheKey,
     /// Route by the header trio `session_id`, `x-client-request-id`, and
     /// `x-session-affinity`, each carrying the session id verbatim.
@@ -98,8 +96,6 @@ pub enum OpenAiCacheRetention {
     /// `prompt_cache_retention: "24h"` request field, so an explicit
     /// [`Long`](crate::CacheRetention::Long) request emits it instead of
     /// being refused.
-    ///
-    /// Declared by [`Provider::openai`].
     Long,
 }
 
@@ -268,8 +264,6 @@ pub enum OpenAiReasoningFormat {
     /// A top-level `reasoning_effort: "<effort>"` string and nothing else.
     /// `Off` sends `reasoning_effort: "none"`, the documented disabling value
     /// of this shape.
-    ///
-    /// Declared by [`Provider::openai`].
     ReasoningEffort,
     /// A `thinking: { "type": "enabled" | "disabled" }` toggle carrying a
     /// top-level `reasoning_effort: "<effort>"` when enabled. `Off` sends
@@ -827,29 +821,6 @@ impl Provider {
     pub fn with_http_client(mut self, client: reqwest::Client) -> Self {
         self.http = client;
         self
-    }
-
-    /// OpenAI — Chat Completions with `prompt_cache_key` session affinity and
-    /// an attested 24-hour prompt-cache retention field.
-    ///
-    /// Reasoning: top-level `reasoning_effort`. Tool choice: all four choices,
-    /// plus strict tool schemas.
-    pub fn openai() -> Self {
-        Self::openai_compatible(
-            "openai",
-            "OpenAI",
-            "https://api.openai.com/v1",
-            ["OPENAI_API_KEY"],
-        )
-        .with_openai_compat(OpenAiCompat {
-            session_affinity: OpenAiSessionAffinity::PromptCacheKey,
-            cache_retention: OpenAiCacheRetention::Long,
-            reasoning_format: OpenAiReasoningFormat::ReasoningEffort,
-            tool_choice: ToolChoiceSupport::ALL,
-            strict_tool_schemas: true,
-            ..OpenAiCompat::default()
-        })
-        .with_models_dev_id("openai")
     }
 
     /// DeepSeek — OpenAI-compatible, `DEEPSEEK_API_KEY`.

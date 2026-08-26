@@ -17,6 +17,7 @@ use banshu_ai::models_dev::{ModelsDevModel, models_from_api_json};
 use banshu_ai::{CostTier, Modality, ModelCost};
 use serde::Serialize;
 use serde_json::Value;
+use xtask::workspace_root;
 
 /// (banshu provider id, models.dev provider key).
 const PROVIDERS: &[(&str, &str)] = &[
@@ -119,11 +120,7 @@ fn main() {
 }
 
 fn verify_release_package() -> Result<(), Box<dyn std::error::Error>> {
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|path| path.parent())
-        .ok_or("xtask must live two directories below the workspace root")?
-        .to_path_buf();
+    let workspace_root = workspace_root();
     let metadata = Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .current_dir(&workspace_root)

@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#98](https://github.com/meymchen/banshu/pull/98)).
 - Conversation persistence serializes `Context` directly, without a version
   wrapper or compatibility layer for the unconsumed pre-1.0 shape.
+- The built-in provider surface is limited to the six roadmap targets;
+  `Provider::openai()` was removed while the custom OpenAI-compatible provider
+  seam remains.
 - The release toolchain and CI are pinned to Rust 1.98.0, and the published
   package is verified from its own archive before release.
 

@@ -26,10 +26,23 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 diff -u README.md crates/ai/README.md
 cargo test -p xtask --test release_package
 cargo deny --all-features check licenses
-cargo semver-checks check-release -p banshu-ai --baseline-version 0.9.0 --all-features --release-type minor
+cargo semver-checks check-release -p banshu-ai --baseline-version 0.9.0 --all-features --release-type major
 cargo publish --dry-run -p banshu-ai --all-features
 cargo run -p xtask -- verify-release-package
 ```
+
+The API review also runs the stricter comparison below with
+`--release-type minor`:
+
+```sh
+cargo semver-checks check-release -p banshu-ai --baseline-version 0.9.0 --all-features --release-type minor
+```
+
+That command is expected to exit nonzero with exactly one
+`inherent_method_missing` finding, `Provider::openai`. The 2026-08-26 audit
+reported 195 passing checks and that one intentional failure. Any other
+finding is unexpected and must be fixed or receive an explicit disposition in
+this section.
 
 The final command runs the minimum, OAuth, and custom-provider README doctests
 and the direct `Context` fixture test from Cargo's unpacked `.crate`, not from
@@ -110,10 +123,12 @@ them.
   `cargo deny --all-features check licenses` evaluates the full dependency
   graph.
 - `cargo semver-checks` compares the all-feature public API with published
-  `0.9.0` under minor-release rules, which is stricter than the allowed 1.0
-  major transition. Any removal therefore fails unless this audit and gate are
-  deliberately amended. The direct `Context` persistence change is intentional
-  greenfield serialization, not an invitation to restore the unused wrapper.
+  `0.9.0` under the 1.0 major-release rules. The API review found one deliberate
+  scope removal: `Provider::openai()` was a seventh built-in, outside the six
+  roadmap targets. OpenAI-compatible custom providers remain supported through
+  the generic extension seam. The direct `Context` persistence change is also
+  intentional greenfield serialization, not an invitation to restore the
+  unused wrapper.
 - [`CHANGELOG.md`](../crates/ai/CHANGELOG.md) describes the pending-message,
   injected-client, compatibility-declaration, sampling, direct-persistence,
   MSRV, and package-verification changes since 0.9.0 without migration guidance.

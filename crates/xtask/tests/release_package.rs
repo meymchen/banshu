@@ -1,13 +1,6 @@
-use std::path::PathBuf;
 use std::process::Command;
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|path| path.parent())
-        .expect("xtask lives two directories below the workspace root")
-        .to_path_buf()
-}
+use xtask::workspace_root;
 
 fn package_files() -> Vec<String> {
     let output = Command::new(env!("CARGO"))
@@ -114,5 +107,25 @@ fn package_carries_only_the_promised_protocols_and_provider_catalogs() {
     assert_eq!(
         public_protocol_modules,
         ["anthropic_messages", "openai_completions"]
+    );
+
+    let provider_module = std::fs::read_to_string(
+        workspace_root()
+            .join("crates")
+            .join("ai")
+            .join("src")
+            .join("provider")
+            .join("mod.rs"),
+    )
+    .expect("read the packaged provider module");
+    for constructor in ["deepseek", "zai", "moonshot", "xiaomi", "kimi", "minimax"] {
+        assert!(
+            provider_module.contains(&format!("pub fn {constructor}(")),
+            "release package is missing Provider::{constructor}"
+        );
+    }
+    assert!(
+        !provider_module.contains("pub fn openai()"),
+        "OpenAI is a custom-compatible endpoint, not one of the six built-ins"
     );
 }

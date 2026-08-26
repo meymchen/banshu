@@ -61,7 +61,16 @@ fn provider(id: &str) -> Provider {
         "xiaomi" => Provider::xiaomi(),
         "zai" => Provider::zai(),
         "moonshot" => Provider::moonshot(),
-        "openai" => Provider::openai(),
+        "reasoning-effort" => Provider::openai_compatible(
+            "reasoning-effort",
+            "Reasoning effort fixture",
+            "https://example.invalid/v1",
+            ["TEST_API_KEY"],
+        )
+        .with_openai_compat(OpenAiCompat {
+            reasoning_format: OpenAiReasoningFormat::ReasoningEffort,
+            ..OpenAiCompat::default()
+        }),
         other => panic!("`{other}` is not an OpenAI-compatible provider under test"),
     }
 }
@@ -90,12 +99,12 @@ fn options(reasoning: Option<ReasoningOptions>) -> StreamOptions {
 
 /// A model of `provider` to stream against, pointed at `server`: one that
 /// attests a reasoning level, else the provider's first model, else — for a
-/// provider banshu bundles no catalog for at all — a hand-built model
+/// custom provider with no bundled catalog — a hand-built model
 /// attesting the baseline ladder, which is what a caller of such a provider
 /// supplies themselves.
 ///
 /// The middle case is Moonshot, whose endpoint takes no reasoning field and
-/// whose models therefore attest no level; the last is `openai`.
+/// whose models therefore attest no level; the last is `reasoning-effort`.
 fn reasoning_model(provider: &Provider, server: &MockServer) -> Model {
     let models = provider.models();
     if let Some(model) = models
@@ -324,7 +333,7 @@ async fn the_reasoning_effort_shape_sends_the_level_as_a_string() {
         ReasoningEffort::Medium,
         ReasoningEffort::High,
     ] {
-        let body = sent_body("openai", Some(ReasoningOptions::new(effort))).await;
+        let body = sent_body("reasoning-effort", Some(ReasoningOptions::new(effort))).await;
         carries_only(
             &body,
             &[("reasoning_effort", Value::String(effort.to_string()))],
@@ -337,7 +346,11 @@ async fn the_reasoning_effort_shape_disables_with_none_not_silence() {
     // This shape has no toggle, so the disabling value is a level of its own:
     // `none`, which is what the endpoint documents. Our ladder spells the same
     // level `off`, and the two are not interchangeable on the wire.
-    let body = sent_body("openai", Some(ReasoningOptions::new(ReasoningEffort::Off))).await;
+    let body = sent_body(
+        "reasoning-effort",
+        Some(ReasoningOptions::new(ReasoningEffort::Off)),
+    )
+    .await;
     carries_only(&body, &[("reasoning_effort", Value::String("none".into()))]);
 }
 
@@ -669,7 +682,7 @@ async fn no_declared_shape_carries_a_token_budget() {
         .await;
     }
     rejected(
-        "openai",
+        "reasoning-effort",
         ReasoningOptions::new(ReasoningEffort::High).with_token_budget(4096),
     )
     .await;
@@ -732,7 +745,7 @@ async fn no_reasoning_option_leaves_every_shape_untouched() {
         let body = sent_body(id, None).await;
         carries_only(&body, &[]);
     }
-    carries_only(&sent_body("openai", None).await, &[]);
+    carries_only(&sent_body("reasoning-effort", None).await, &[]);
 }
 
 #[tokio::test]
