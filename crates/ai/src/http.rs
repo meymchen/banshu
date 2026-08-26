@@ -12,6 +12,9 @@ use serde_json::Value;
 use crate::error::{ErrorKind, classify_status};
 use crate::types::{Diagnostic, DiagnosticCode};
 
+/// Product identity attached to every request made by the crate-owned client.
+pub(crate) const DEFAULT_USER_AGENT: &str = concat!("banshu-ai/", env!("CARGO_PKG_VERSION"));
+
 /// Retries attempted when `StreamOptions::max_retries` is unset. Matches the
 /// Anthropic/OpenAI official SDK default.
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 2;
@@ -219,7 +222,39 @@ pub(crate) fn retry_delay(
     )))
 }
 
-/// Build the default shared HTTP client.
+/// Build the default shared HTTP client, identified consistently across
+/// inference, OAuth, catalog-refresh, and model-probe requests.
 pub(crate) fn build_client() -> reqwest::Client {
-    reqwest::Client::builder().build().unwrap_or_default()
+    reqwest::Client::builder()
+        .user_agent(DEFAULT_USER_AGENT)
+        .build()
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::{DEFAULT_USER_AGENT, build_client};
+
+    #[tokio::test]
+    async fn default_client_identifies_banshu() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/identity"))
+            .and(header("user-agent", DEFAULT_USER_AGENT))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let response = build_client()
+            .get(format!("{}/identity", server.uri()))
+            .send()
+            .await
+            .expect("the local identity request succeeds");
+
+        assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+    }
 }

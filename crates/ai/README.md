@@ -71,11 +71,29 @@ scripts/smoke-ai.sh --provider deepseek --model deepseek-v4-pro
 scripts/smoke-ai.sh --provider minimax --extended
 ```
 
+To exercise Kimi's OAuth device flow with a Kimi Code subscription, make sure
+the API-key override is absent, then run:
+
+```bash
+unset KIMI_API_KEY
+scripts/smoke-ai.sh --provider kimi --oauth
+```
+
+The command prints the verification URL and user code, waits for browser
+authorization, checks that the in-memory OAuth credential is available, and
+uses that credential for the live inference request. The credential is kept
+only for this process and is discarded when the smoke test exits.
+
 Use `--verbose` to print the request observer's redacted payload, URL, headers,
 and response metadata. Each live request has a 30-second timeout, zero retries,
 and a small output budget. The script never prints API keys and does not load
 `.env` automatically; [the repository `.env.example`](https://github.com/meymchen/banshu/blob/main/.env.example)
 lists the supported variables and model overrides.
+
+The crate-owned HTTP client identifies every inference, OAuth, discovery, and
+probe request as `banshu-ai/<crate version>`. An application-owned client
+injected with `Provider::with_http_client` keeps the application's own default
+header policy.
 
 `Provider::deepseek`, `zai`, `moonshot`, and `xiaomi` use OpenAI Chat
 Completions. `Provider::kimi` and `minimax` use Anthropic Messages. The

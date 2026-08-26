@@ -4,10 +4,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use banshu_ai::{
-    AssistantContent, AssistantMessage, AssistantMessageEvent, BeforeSendObservation, Context,
-    InMemoryCredentialStore, Message, MiniMaxRegion, Model, Provider, ReasoningEffort,
-    ReasoningOptions, RequestObserver, ResponseObservation, StopReason, StreamOptions, Tool,
-    ToolCall, ToolChoice,
+    AssistantContent, AssistantMessage, AssistantMessageEvent, AuthInteraction,
+    AuthInteractionHandler, BeforeSendObservation, Context, InMemoryCredentialStore, Message,
+    MiniMaxRegion, Model, Models, Provider, ReasoningEffort, ReasoningOptions, RequestObserver,
+    ResponseObservation, Result as AiResult, StopReason, StreamOptions, Tool, ToolCall, ToolChoice,
+    VerificationDetails, async_trait,
 };
 use futures_util::StreamExt;
 
@@ -91,6 +92,7 @@ impl fmt::Display for ProviderId {
 struct Args {
     provider: Option<ProviderId>,
     model: Option<String>,
+    oauth: bool,
     extended: bool,
     verbose: bool,
 }
@@ -106,6 +108,7 @@ impl Args {
                     print_help();
                     return Ok(None);
                 }
+                "--oauth" => parsed.oauth = true,
                 "--extended" => parsed.extended = true,
                 "--verbose" => parsed.verbose = true,
                 "--provider" => {
@@ -137,6 +140,9 @@ impl Args {
                 "--model requires --provider because model ids are provider-specific".into(),
             );
         }
+        if parsed.oauth && parsed.provider != Some(ProviderId::Kimi) {
+            return Err("--oauth requires --provider kimi".into());
+        }
 
         Ok(Some(parsed))
     }
@@ -156,6 +162,27 @@ struct StreamResult {
 }
 
 struct VerboseObserver;
+
+struct TerminalAuthHandler;
+
+#[async_trait]
+impl AuthInteractionHandler for TerminalAuthHandler {
+    async fn show_verification(&self, details: &VerificationDetails) -> AiResult<()> {
+        eprintln!("Authorize Kimi OAuth in your browser:");
+        eprintln!("  URL: {}", details.url);
+        if let Some(code) = &details.user_code {
+            eprintln!("  Code: {code}");
+        }
+        if let Some(instructions) = &details.instructions {
+            eprintln!("  {instructions}");
+        }
+        Ok(())
+    }
+
+    async fn report_status(&self, message: &str) {
+        eprintln!("OAuth: {message}");
+    }
+}
 
 impl RequestObserver for VerboseObserver {
     fn before_send(&self, observation: &BeforeSendObservation) {
@@ -205,7 +232,15 @@ async fn main() {
     let mut failures = 0_usize;
 
     for provider_id in selected {
-        if !env_is_set(provider_id.key_env()) {
+        if args.oauth && env_is_set(provider_id.key_env()) {
+            eprintln!(
+                "FAIL {provider_id}: unset {} so the API-key override cannot bypass OAuth",
+                provider_id.key_env()
+            );
+            failures += 1;
+            continue;
+        }
+        if !args.oauth && !env_is_set(provider_id.key_env()) {
             if args.provider.is_some() {
                 eprintln!(
                     "FAIL {provider_id}: required environment variable {} is not set",
@@ -222,35 +257,13 @@ async fn main() {
         }
 
         checked += 1;
-        let provider = provider_id.build();
-        let model_id = args
-            .model
-            .clone()
-            .or_else(|| nonempty_env(provider_id.model_env()))
-            .unwrap_or_else(|| provider_id.default_model().to_string());
-        let Some(model) = provider
-            .models()
-            .into_iter()
-            .find(|candidate| candidate.id == model_id)
-        else {
-            let available = provider
-                .models()
-                .into_iter()
-                .map(|model| model.id)
-                .collect::<Vec<_>>()
-                .join(", ");
-            eprintln!(
-                "FAIL {provider_id}: model `{model_id}` is not in the bundled catalog; available: {available}"
-            );
-            failures += 1;
-            continue;
+        let result = if args.oauth {
+            run_oauth_provider(provider_id, &args).await
+        } else {
+            let provider = provider_id.build();
+            run_configured_provider(provider_id, &provider, &args).await
         };
-
-        println!(
-            "CHECK {provider_id}: model={model_id} extended={}",
-            args.extended
-        );
-        if let Err(error) = run_provider(provider_id, &provider, &model, &args).await {
+        if let Err(error) = result {
             eprintln!("FAIL {provider_id}: {error}");
             failures += 1;
         }
@@ -262,6 +275,65 @@ async fn main() {
     if failures > 0 {
         std::process::exit(1);
     }
+}
+
+async fn run_oauth_provider(provider_id: ProviderId, args: &Args) -> Result<(), String> {
+    let store = Arc::new(InMemoryCredentialStore::new());
+    let models = Models::new().with_provider(Provider::kimi(store));
+    let interaction = AuthInteraction::new(Arc::new(TerminalAuthHandler));
+
+    eprintln!("LOGIN {provider_id}: starting OAuth device authorization");
+    models
+        .login(provider_id.name(), &interaction)
+        .await
+        .map_err(|error| format!("OAuth login failed: {error}"))?;
+    if !models
+        .check_auth(provider_id.name())
+        .await
+        .map_err(|error| format!("OAuth auth check failed: {error}"))?
+    {
+        return Err("OAuth login completed but the provider is unavailable".into());
+    }
+    eprintln!("PASS {provider_id}/oauth-login: stored credential is available");
+
+    let provider = models
+        .provider(provider_id.name())
+        .ok_or_else(|| format!("provider `{provider_id}` disappeared after login"))?;
+    run_configured_provider(provider_id, provider, args).await
+}
+
+async fn run_configured_provider(
+    provider_id: ProviderId,
+    provider: &Provider,
+    args: &Args,
+) -> Result<(), String> {
+    let model_id = args
+        .model
+        .clone()
+        .or_else(|| nonempty_env(provider_id.model_env()))
+        .unwrap_or_else(|| provider_id.default_model().to_string());
+    let Some(model) = provider
+        .models()
+        .into_iter()
+        .find(|candidate| candidate.id == model_id)
+    else {
+        let available = provider
+            .models()
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "model `{model_id}` is not in the bundled catalog; available: {available}"
+        ));
+    };
+
+    println!(
+        "CHECK {provider_id}: auth={} model={model_id} extended={}",
+        if args.oauth { "oauth" } else { "api-key" },
+        args.extended,
+    );
+    run_provider(provider_id, provider, &model, args).await
 }
 
 async fn run_provider(
@@ -545,6 +617,7 @@ fn print_help() {
 Usage: live_smoke [OPTIONS]\n\n\
 Options:\n  \
   --provider <deepseek|kimi|minimax>  Check one provider (default: all configured)\n  \
+  --oauth                             Log in with Kimi OAuth (requires --provider kimi)\n  \
   --model <MODEL_ID>                  Override the selected provider's model\n  \
   --extended                          Also check reasoning and a tool round trip\n  \
   --verbose                           Print redacted request and response diagnostics\n  \
