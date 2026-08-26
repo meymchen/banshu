@@ -15,11 +15,22 @@ fn package_files() -> Vec<String> {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    String::from_utf8(output.stdout)
+    parse_package_files(output.stdout)
+}
+
+fn parse_package_files(output: Vec<u8>) -> Vec<String> {
+    String::from_utf8(output)
         .expect("cargo emits UTF-8 paths")
         .lines()
-        .map(str::to_owned)
+        .map(|path| path.replace('\\', "/"))
         .collect()
+}
+
+#[test]
+fn package_file_paths_use_archive_separators_on_every_platform() {
+    let files = parse_package_files(b"README.md\r\nexamples\\faux_provider.rs\r\n".to_vec());
+
+    assert_eq!(files, ["README.md", "examples/faux_provider.rs"]);
 }
 
 #[test]
