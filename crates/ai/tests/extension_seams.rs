@@ -11,7 +11,8 @@ use std::sync::Arc;
 use banshu_ai::api::anthropic_messages::AnthropicMessages;
 use banshu_ai::api::openai_completions::OpenAiCompletions;
 use banshu_ai::{
-    ApiKind, Auth, AuthResolver, Context, Error, ErrorKind, Model, Models, PreparedRequest,
+    ApiKind, Auth, AuthResolver, Context, Error, ErrorKind, Model, Models,
+    OpenAiChatTemplateKwargs, OpenAiCompat, OpenAiReasoningFormat, PreparedRequest,
     ProtocolAdapter, ProtocolEvent, ProtocolEventStream, Provider, ProviderHeaders, ResolvedAuth,
     Result, StopReason, StreamOptions, async_trait,
 };
@@ -277,6 +278,76 @@ fn builder_rejects_two_adapters_for_the_same_protocol() {
         .expect("build must fail");
     assert!(matches!(err, Error::Config(_)));
     assert!(err.to_string().contains("openai-completions"));
+}
+
+#[test]
+fn builder_rejects_chat_template_reasoning_declarations_that_carry_no_values() {
+    let err = Provider::builder("p", "P", "http://localhost")
+        .adapter(Arc::new(OpenAiCompletions))
+        .openai_compat(OpenAiCompat {
+            reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(
+                OpenAiChatTemplateKwargs::default(),
+            ),
+            ..OpenAiCompat::default()
+        })
+        .build()
+        .err()
+        .expect("build must reject an empty reasoning declaration");
+
+    assert!(matches!(err, Error::Config(_)));
+    assert!(err.to_string().contains("chat_template_kwargs"));
+}
+
+#[test]
+fn builder_rejects_two_chat_template_values_that_replace_the_same_keyword() {
+    let err = Provider::builder("p", "P", "http://localhost")
+        .adapter(Arc::new(OpenAiCompletions))
+        .openai_compat(OpenAiCompat {
+            reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+                enable_thinking: Some("reasoning"),
+                reasoning_effort: Some("reasoning"),
+                ..OpenAiChatTemplateKwargs::default()
+            }),
+            ..OpenAiCompat::default()
+        })
+        .build()
+        .err()
+        .expect("build must reject contradictory substitutions");
+
+    assert!(matches!(err, Error::Config(_)));
+    assert!(err.to_string().contains("reasoning"));
+}
+
+#[test]
+fn builder_rejects_malformed_chat_template_reasoning_keywords() {
+    let malformed = [
+        OpenAiChatTemplateKwargs {
+            enable_thinking: Some("  "),
+            ..OpenAiChatTemplateKwargs::default()
+        },
+        OpenAiChatTemplateKwargs {
+            token_budget: Some(banshu_ai::OpenAiReasoningBudgetField::ThinkingBudget),
+            ..OpenAiChatTemplateKwargs::default()
+        },
+        OpenAiChatTemplateKwargs {
+            enable_thinking: Some("thinking_budget"),
+            token_budget: Some(banshu_ai::OpenAiReasoningBudgetField::ThinkingBudget),
+            ..OpenAiChatTemplateKwargs::default()
+        },
+    ];
+
+    for kwargs in malformed {
+        let err = Provider::builder("p", "P", "http://localhost")
+            .adapter(Arc::new(OpenAiCompletions))
+            .openai_compat(OpenAiCompat {
+                reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(kwargs),
+                ..OpenAiCompat::default()
+            })
+            .build()
+            .err()
+            .expect("build must reject malformed reasoning keywords");
+        assert!(matches!(err, Error::Config(_)), "{err}");
+    }
 }
 
 /// A resolver whose availability answer is gated by a flag.

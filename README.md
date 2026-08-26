@@ -125,6 +125,15 @@ unsupported efforts and token budgets fail in-band instead of being silently
 clamped. `ReasoningEffort::Off` actively disables reasoning, while a missing
 option leaves the provider default untouched.
 
+Custom OpenAI-compatible runtimes can declare a top-level
+`OpenAiReasoningFormat::EnableThinking` boolean or typed
+`ChatTemplateKwargs`. Chat-template declarations choose keyword names for the
+enabled state and effort, while token budgets use the closed
+`OpenAiReasoningBudgetField` vocabulary. The adapter supplies the values and
+owns the surrounding request object, so a declaration cannot act as an
+arbitrary JSON patch. Explicit budgets must be attested by the model and fit
+under the resolved Output Budget.
+
 ## Cancellation and retry
 
 Put a `CancellationToken` in `StreamOptions::cancellation` to cover credential

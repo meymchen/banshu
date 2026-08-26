@@ -14,7 +14,7 @@
 
 use crate::options::StreamOptions;
 use crate::provider::{AnthropicCompat, DeclaredReasoning, OpenAiCompat};
-use crate::types::{CapabilitySupport, Model};
+use crate::types::{ApiKind, CapabilitySupport, Model, ReasoningEffort};
 
 /// Check `options.reasoning` against the target model and provider. `Ok(())`
 /// means the request can be honoured — including the common case of no
@@ -61,6 +61,12 @@ pub(crate) fn validate(
     }
 
     if let Some(tokens) = reasoning.token_budget {
+        if effort == ReasoningEffort::Off {
+            return Err(format!(
+                "a reasoning budget of {tokens} cannot be requested alongside effort `off`, \
+                 which disables reasoning outright",
+            ));
+        }
         if !format.token_budget {
             return Err(format!(
                 "the reasoning request format declared by provider `{}` carries no token budget, \
@@ -75,12 +81,22 @@ pub(crate) fn validate(
                 model.id,
             ));
         }
+        if model.api == ApiKind::OpenAiCompletions
+            && options.max_tokens.is_some_and(|output| tokens >= output)
+        {
+            return Err(format!(
+                "a reasoning budget of {tokens} does not fit under the resolved Output Budget \
+                 of {} for model `{}`",
+                options.max_tokens.expect("checked as present"),
+                model.id,
+            ));
+        }
     }
 
-    if format.token_budget {
-        // A budget shape spends the same `max_tokens` the answer does, so what
-        // fits is a question only the protocol that ships that field can
-        // answer. Anthropic's is the one shape that carries a budget today.
+    if model.api == ApiKind::AnthropicMessages && format.token_budget {
+        // Anthropic's budget-only shape must derive a number when the caller
+        // names none and enforces its own documented minimum. OpenAI-compatible
+        // chat-template budgets are optional and were fully checked above.
         super::anthropic_messages::validate_thinking_budget(model, options, reasoning)?;
     }
 
