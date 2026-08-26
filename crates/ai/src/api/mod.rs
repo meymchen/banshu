@@ -20,6 +20,7 @@ mod normalize;
 mod output_budget;
 mod protocol_event;
 mod reasoning;
+mod sampling;
 mod temperature;
 mod tool_choice;
 
@@ -258,12 +259,13 @@ pub(crate) fn drive(
             }
         };
 
-        // The reasoning, temperature, tool-choice, and cache-routing
-        // preflights read only the options, the model's attested capability,
-        // and the provider's declared request shape, so they run first: a
-        // request nothing can honour fails before any work is done on its
-        // behalf. Temperature runs after reasoning so an "enabled reasoning
-        // request" it sees is always one that will actually be sent.
+        // The reasoning, temperature, tool-choice, cache-routing, and
+        // sampling preflights read only the options, the model's attested
+        // capability, and the provider's declared request shape, so they run
+        // first: a request nothing can honour fails before any work is done
+        // on its behalf. Temperature runs after reasoning so an "enabled
+        // reasoning request" it sees is always one that will actually be
+        // sent.
         if let Err(detail) =
             reasoning::validate(&model, &options, openai_compat, anthropic_compat)
         {
@@ -285,6 +287,13 @@ pub(crate) fn drive(
         if let Err(detail) =
             cache_routing::validate(&model, &options, openai_compat, anthropic_compat)
         {
+            yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
+            return;
+        }
+        // The sampling preflight needs no compat declarations: a caller
+        // sampling key may never shadow a field the adapter owns, on any
+        // endpoint.
+        if let Err(detail) = sampling::validate(&model, &options) {
             yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
             return;
         }

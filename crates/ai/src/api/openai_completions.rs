@@ -29,6 +29,16 @@ use crate::types::{
 /// The OpenAI-completions wire protocol.
 pub struct OpenAiCompletions;
 
+impl OpenAiCompletions {
+    /// The adapter-owned request fields
+    /// [`StreamOptions::sampling`](crate::StreamOptions::sampling) may not
+    /// name — a published seam for downstream conformance tests, not curated
+    /// end-user API.
+    #[doc(hidden)]
+    pub const RESERVED_SAMPLING_KEYS: &'static [&'static str] =
+        super::sampling::RESERVED_SAMPLING_KEYS;
+}
+
 const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH: usize = 64;
 
 impl ProtocolAdapter for OpenAiCompletions {
@@ -778,6 +788,17 @@ fn build_request_body(
 
     let reasoning = reasoning_wire(compat.reasoning_format, options.reasoning.as_ref());
 
+    // The [sampling preflight](super::sampling) has already refused any
+    // caller sampling key the adapter owns, so the map reaching here can only
+    // add fields — never shadow one — and an empty map flattens to nothing.
+    debug_assert!(
+        options
+            .sampling
+            .keys()
+            .all(|key| !super::sampling::RESERVED_SAMPLING_KEYS.contains(&key.as_str())),
+        "the sampling preflight should have refused this request",
+    );
+
     // The resolved Output Budget ships on exactly the field the provider
     // declared; the other standard field stays absent.
     let (max_tokens, max_completion_tokens) = match compat.output_token_field {
@@ -805,6 +826,7 @@ fn build_request_body(
         enable_thinking: reasoning.enable_thinking,
         chat_template_kwargs: reasoning.chat_template_kwargs,
         tool_choice: tool_choice_wire(options.tool_choice.as_ref()),
+        sampling: options.sampling.clone(),
     }
 }
 
@@ -861,6 +883,12 @@ struct ChatRequest {
     chat_template_kwargs: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<serde_json::Value>,
+    /// Caller-supplied OpenAI-compatible sampling parameters, flattened into
+    /// the top level of the request. Guarded by the sampling preflight, so a
+    /// key here can never collide with a field above; an empty map — the
+    /// default — serializes to nothing.
+    #[serde(flatten)]
+    sampling: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// The `thinking: { "type": "enabled" | "disabled" }` object DeepSeek, Xiaomi

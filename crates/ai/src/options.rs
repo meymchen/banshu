@@ -160,6 +160,24 @@ pub struct StreamOptions {
     pub headers: ProviderHeaders,
     /// Caller-defined request metadata for adapters and diagnostics.
     pub metadata: BTreeMap<String, serde_json::Value>,
+    /// Extra sampling parameters merged into the top level of an
+    /// OpenAI-compatible request body.
+    ///
+    /// This is the escape hatch for open-model sampling controls the crate
+    /// does not model — `top_p`, `top_k`, `min_p`, repetition penalties,
+    /// `seed`, `stop`, and any other key an OpenAI-compatible endpoint
+    /// accepts. Values are arbitrary JSON (integer, float, boolean, string,
+    /// array, object, or null) and are sent verbatim; an empty map — the
+    /// default — adds nothing to the request.
+    ///
+    /// The map can never override a field the adapter owns: keys covering the
+    /// model, messages, tools, stream controls, output budget, reasoning,
+    /// tool choice, caching, metadata, and authentication are reserved, and a
+    /// reserved key fails in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) —
+    /// naming the offending key — before authentication or any HTTP request.
+    /// The Anthropic Messages protocol ignores this map entirely.
+    pub sampling: BTreeMap<String, serde_json::Value>,
     /// Cap on how long a server-requested `Retry-After` may ask the client to
     /// wait before the executor gives up and fails as `RateLimited` instead of
     /// sleeping. `None` uses the default of 60 seconds.
@@ -199,6 +217,7 @@ impl std::fmt::Debug for StreamOptions {
             .field("session_id", &self.session_id)
             .field("headers", &RedactedHeaders(&self.headers))
             .field("metadata", &RedactedMetadata(&self.metadata))
+            .field("sampling", &RedactedMetadata(&self.sampling))
             .field("max_retry_delay", &self.max_retry_delay)
             .field("cancellation", &self.cancellation)
             .field("observer", &self.observer.as_ref().map(|_| "Some(..)"))

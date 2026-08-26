@@ -10,10 +10,19 @@ The `banshu-ai` protocol-boundary property suites use `proptest` to exercise:
   and idempotence; and
 - case-insensitive header precedence and secret redaction.
 
-Run every property with its checked-in case count:
+These pure properties live in `--lib` unit tests named `property_*`. Run every
+one with its checked-in case count:
 
 ```sh
 cargo test -p banshu-ai --lib property_
+```
+
+Wire-level properties — which need a local mock HTTP server, so they live in
+integration tests instead — follow the same `property_*` naming. Today those
+are the sampling-guard suites, run with:
+
+```sh
+cargo test -p banshu-ai --test openai_sampling property_
 ```
 
 Proptest automatically replays checked-in failure corpora before generating
