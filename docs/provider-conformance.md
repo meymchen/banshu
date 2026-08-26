@@ -12,8 +12,8 @@ reported by the provider.
 | Z.AI | OpenAI Chat Completions | `ZAI_API_KEY` | on/off toggle | model dependent; choice `auto` | model dependent | automatic |
 | Moonshot AI | OpenAI Chat Completions | `MOONSHOT_API_KEY` | no request control | model dependent; all choices; strict schemas | model dependent | automatic; Moonshot cache-read usage |
 | Xiaomi MiMo | OpenAI Chat Completions | `XIAOMI_API_KEY` | on/off toggle | model dependent; choice `auto`; strict schemas | model dependent | automatic |
-| Kimi For Coding | Anthropic Messages | OAuth device flow; `KIMI_API_KEY` override | on/off toggle | model dependent; no explicit choice attested | model dependent | Anthropic cache breakpoints and usage |
-| MiniMax (Global/CN) | Anthropic Messages | OAuth portal flow; `MINIMAX_API_KEY` override | adaptive thinking | model dependent; all choices | model dependent | Anthropic cache breakpoints and usage |
+| Kimi For Coding | Anthropic Messages | OAuth device flow; `KIMI_API_KEY` override | on/off toggle | model dependent; no explicit choice attested | model dependent | Anthropic cache breakpoints (system, messages, tools; 1h TTL attested) and usage |
+| MiniMax (Global/CN) | Anthropic Messages | OAuth portal flow; `MINIMAX_API_KEY` override | adaptive thinking | model dependent; all choices | model dependent | Anthropic cache breakpoints (system, messages, tools; 1h TTL attested) and usage |
 
 ## Automated evidence
 
@@ -40,6 +40,11 @@ Every fixed promise above is exercised without live credentials:
   long-retention attestation — no provider in the matrix declares either):
   `crates/ai/tests/provider_conformance.rs` and
   `crates/ai/tests/openai_prompt_caching.rs`.
+- Anthropic-compatible cache policies (the one-hour TTL attestation and
+  tool-definition cache control — Kimi and MiniMax declare both, every other
+  provider keeps the undeclared defaults):
+  `crates/ai/tests/provider_conformance.rs` and
+  `crates/ai/tests/anthropic_prompt_caching.rs`.
 - OpenAI-compatible request envelopes (streamed-usage request and the
   output-token field carrying the Output Budget — every bundled provider
   keeps the default: usage requested, `max_tokens`):

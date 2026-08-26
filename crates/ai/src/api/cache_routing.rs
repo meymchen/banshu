@@ -14,7 +14,9 @@
 //! names the retention that would have worked.
 
 use crate::options::{CacheRetention, StreamOptions};
-use crate::provider::{OpenAiCacheRetention, OpenAiCompat};
+use crate::provider::{
+    AnthropicCacheRetention, AnthropicCompat, OpenAiCacheRetention, OpenAiCompat,
+};
 use crate::types::{ApiKind, Model};
 
 /// Check `options.cache_retention` against what the provider declares for the
@@ -26,34 +28,34 @@ pub(crate) fn validate(
     model: &Model,
     options: &StreamOptions,
     openai: OpenAiCompat,
+    anthropic: AnthropicCompat,
 ) -> Result<(), String> {
     if options.cache_retention != Some(CacheRetention::Long) {
         return Ok(());
     }
-    match model.api {
-        // The Anthropic adapter expresses long retention through its
-        // one-hour cache-control TTL, which every Messages endpoint takes, so
-        // only the OpenAI-compatible side can fail this check.
-        ApiKind::AnthropicMessages => Ok(()),
-        ApiKind::OpenAiCompletions => {
-            if openai.cache_retention == OpenAiCacheRetention::Long {
-                return Ok(());
-            }
-            Err(format!(
-                "provider `{}` cannot express long prompt-cache retention for the `{}` \
-                 protocol; supported retention: short, disabled",
-                model.provider,
-                super::api_name(model.api),
-            ))
-        }
+    let attested = match model.api {
+        // OpenAI attests the `prompt_cache_retention: "24h"` request field.
+        ApiKind::OpenAiCompletions => openai.cache_retention == OpenAiCacheRetention::Long,
+        // Anthropic attests the one-hour cache-control TTL.
+        ApiKind::AnthropicMessages => anthropic.cache_retention == AnthropicCacheRetention::Long,
+    };
+    if attested {
+        return Ok(());
     }
+    Err(format!(
+        "provider `{}` cannot express long prompt-cache retention for the `{}` \
+         protocol; supported retention: short, disabled",
+        model.provider,
+        super::api_name(model.api),
+    ))
 }
 
-/// Unit coverage for what `tests/openai_prompt_caching.rs` cannot reach
-/// end-to-end: the exact rejection detail, and the protocol routing a
-/// mixed-protocol provider forces. The rejection *path* — in-band
-/// `InvalidRequest` before the server records a request — is pinned against a
-/// mock server there; these pin the words and the wiring.
+/// Unit coverage for what `tests/openai_prompt_caching.rs` and
+/// `tests/anthropic_prompt_caching.rs` cannot reach end-to-end: the exact
+/// rejection detail, and the protocol routing a mixed-protocol provider
+/// forces. The rejection *path* — in-band `InvalidRequest` before the server
+/// records a request — is pinned against a mock server there; these pin the
+/// words and the wiring.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,7 +85,12 @@ mod tests {
             Some(CacheRetention::Disabled),
         ] {
             assert_eq!(
-                validate(&model, &asked(retention), OpenAiCompat::default()),
+                validate(
+                    &model,
+                    &asked(retention),
+                    OpenAiCompat::default(),
+                    AnthropicCompat::default(),
+                ),
                 Ok(()),
                 "{retention:?} leaves the endpoint's normal cache behavior alone"
             );
@@ -92,44 +99,83 @@ mod tests {
 
     #[test]
     fn an_attesting_provider_takes_long_retention() {
-        let model = model(ApiKind::OpenAiCompletions);
         let openai = OpenAiCompat {
             cache_retention: OpenAiCacheRetention::Long,
             ..OpenAiCompat::default()
         };
+        let anthropic = AnthropicCompat {
+            cache_retention: AnthropicCacheRetention::Long,
+            ..AnthropicCompat::default()
+        };
         assert_eq!(
-            validate(&model, &asked(Some(CacheRetention::Long)), openai),
+            validate(
+                &model(ApiKind::OpenAiCompletions),
+                &asked(Some(CacheRetention::Long)),
+                openai,
+                AnthropicCompat::default(),
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate(
+                &model(ApiKind::AnthropicMessages),
+                &asked(Some(CacheRetention::Long)),
+                OpenAiCompat::default(),
+                anthropic,
+            ),
             Ok(())
         );
     }
 
     #[test]
     fn an_unattested_long_is_refused_with_the_working_retention_named() {
-        let model = model(ApiKind::OpenAiCompletions);
-        let error = validate(
-            &model,
-            &asked(Some(CacheRetention::Long)),
-            OpenAiCompat::default(),
-        )
-        .expect_err("an unconfigured endpoint attests nothing");
-        assert!(error.contains("provider `test`"), "{error}");
-        assert!(
-            error.contains("supported retention: short, disabled"),
-            "the caller should learn what would have worked: {error}"
-        );
+        for api in [ApiKind::OpenAiCompletions, ApiKind::AnthropicMessages] {
+            let error = validate(
+                &model(api),
+                &asked(Some(CacheRetention::Long)),
+                OpenAiCompat::default(),
+                AnthropicCompat::default(),
+            )
+            .expect_err("an unconfigured endpoint attests nothing");
+            assert!(error.contains("provider `test`"), "{error}");
+            assert!(
+                error.contains("supported retention: short, disabled"),
+                "the caller should learn what would have worked: {error}"
+            );
+        }
     }
 
     #[test]
-    fn the_anthropic_protocol_always_expresses_long_retention() {
-        let model = model(ApiKind::AnthropicMessages);
-        assert_eq!(
+    fn one_protocols_attestation_does_not_cover_the_other() {
+        // A mixed-protocol provider attesting long retention on one protocol
+        // still refuses it on the other.
+        let openai_long = OpenAiCompat {
+            cache_retention: OpenAiCacheRetention::Long,
+            ..OpenAiCompat::default()
+        };
+        assert!(
             validate(
-                &model,
+                &model(ApiKind::AnthropicMessages),
+                &asked(Some(CacheRetention::Long)),
+                openai_long,
+                AnthropicCompat::default(),
+            )
+            .is_err(),
+            "the OpenAI attestation says nothing about the Anthropic protocol"
+        );
+        let anthropic_long = AnthropicCompat {
+            cache_retention: AnthropicCacheRetention::Long,
+            ..AnthropicCompat::default()
+        };
+        assert!(
+            validate(
+                &model(ApiKind::OpenAiCompletions),
                 &asked(Some(CacheRetention::Long)),
                 OpenAiCompat::default(),
-            ),
-            Ok(()),
-            "the one-hour cache-control TTL needs no attestation"
+                anthropic_long,
+            )
+            .is_err(),
+            "the Anthropic attestation says nothing about the OpenAI protocol"
         );
     }
 }

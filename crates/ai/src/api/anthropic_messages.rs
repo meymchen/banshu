@@ -510,6 +510,10 @@ fn map_stop_reason(reason: &str) -> StopReason {
 
 /// The `cache_control` marker to place on cache breakpoints, or `None` when
 /// caching is disabled. `Long` retention requests the 1h TTL.
+///
+/// The [cache-routing preflight](super::cache_routing) has already refused an
+/// explicit `Long` against a provider that does not attest the one-hour TTL,
+/// so a `Long` reaching here is always one the endpoint accepts.
 fn cache_control(options: &crate::StreamOptions) -> Option<Value> {
     match options.cache_retention.unwrap_or(CacheRetention::Short) {
         CacheRetention::Disabled => None,
@@ -648,7 +652,9 @@ fn build_request_body(
     });
 
     // Tools render first in the prompt; one breakpoint on the last tool
-    // caches the whole definition list.
+    // caches the whole definition list. The breakpoint is attached only when
+    // the provider declares tool-definition cache control — suppressing it
+    // leaves the system and message breakpoints above untouched.
     let tool_count = context.tools.len();
     let tools = context
         .tools
@@ -659,7 +665,9 @@ fn build_request_body(
             description: tool.description.clone(),
             input_schema: tool.parameters.clone(),
             strict: (tool.strict && compat.strict_tool_schemas).then_some(true),
-            cache_control: cache_control.clone().filter(|_| index + 1 == tool_count),
+            cache_control: cache_control
+                .clone()
+                .filter(|_| compat.tool_cache_control && index + 1 == tool_count),
         })
         .collect();
 
