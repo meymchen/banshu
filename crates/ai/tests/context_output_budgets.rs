@@ -39,7 +39,12 @@ impl Protocol {
 
     fn provider(self, server: &MockServer) -> Provider {
         match self {
-            Self::OpenAi => Provider::openai(),
+            Self::OpenAi => Provider::openai_compatible(
+                "test-openai",
+                "Test OpenAI-compatible",
+                server.uri(),
+                ["TEST_API_KEY"],
+            ),
             Self::Anthropic => Provider::anthropic_compatible(
                 "test-anthropic",
                 "Test Anthropic",
@@ -56,7 +61,7 @@ impl Protocol {
         }
         .with_base_url(server.uri());
         model.provider = match self {
-            Self::OpenAi => "openai".into(),
+            Self::OpenAi => "test-openai".into(),
             Self::Anthropic => "test-anthropic".into(),
         };
         model.context_window = context_window;

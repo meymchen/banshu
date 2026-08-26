@@ -25,8 +25,7 @@ jobs:
       - run: cargo doc --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
-      - run: diff -u README.md crates/ai/README.md
-      - run: cargo publish --dry-run -p banshu-ai --all-features
+      - uses: ./.github/actions/release-package
 
   # Publish unreleased packages and create git tags / GitHub releases.
   release-plz-release:

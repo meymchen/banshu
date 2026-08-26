@@ -7,7 +7,7 @@ providers over the OpenAI Chat Completions and Anthropic Messages protocols.
 
 ```toml
 [dependencies]
-banshu-ai = "0.9"
+banshu-ai = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # Needed only when constructing an application-owned HTTP client or JSON
 # sampling values, as in the custom-provider example below.

@@ -9,13 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- *(ai)* add complete bundled-provider declarations for stream and open-model
-  request behavior ([#97](https://github.com/meymchen/banshu/issues/97))
+- Application-owned HTTP clients can be injected into built-in and custom
+  providers, including model discovery and OAuth sessions
+  ([#99](https://github.com/meymchen/banshu/pull/99)).
+- OpenAI-compatible providers can declare request-envelope fields, clean-EOF
+  termination, tool-history shapes, cache routing, typed open-model reasoning,
+  and guarded custom sampling parameters; Anthropic-compatible providers can
+  declare cache and temperature support
+  ([#97](https://github.com/meymchen/banshu/issues/97)).
 
 ### Changed
 
-- `AssistantMessageEvent::Start` carries the pending `AssistantMessage`.
-- Persist conversation state by serializing `Context` directly.
+- `AssistantMessageEvent::Start` carries the pending `AssistantMessage`, and
+  `MessageStream::partial()` begins with that same response
+  ([#98](https://github.com/meymchen/banshu/pull/98)).
+- Conversation persistence serializes `Context` directly, without a version
+  wrapper or compatibility layer for the unconsumed pre-1.0 shape.
+- The built-in provider surface is limited to the six roadmap targets;
+  `Provider::openai()` was removed while the custom OpenAI-compatible provider
+  seam remains.
+- The release toolchain and CI are pinned to Rust 1.98.0, and the published
+  package is verified from its own archive before release.
 
 ## [0.9.0](https://github.com/meymchen/banshu/compare/v0.8.0...v0.9.0) - 2026-08-25
 

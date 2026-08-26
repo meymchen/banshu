@@ -6,14 +6,18 @@
 //!   `https://models.dev/api.json` unless `--input` points at a local copy.
 //!   Parsing and filtering rules come from `banshu_ai::models_dev`, the same
 //!   module the runtime catalog refresh uses.
+//! - `verify-release-package` — run the packaged crate's tests and doctests
+//!   after `cargo publish --dry-run -p banshu-ai --all-features`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::process::Command;
 
 use banshu_ai::models_dev::{ModelsDevModel, models_from_api_json};
 use banshu_ai::{CostTier, Modality, ModelCost};
 use serde::Serialize;
 use serde_json::Value;
+use xtask::workspace_root;
 
 /// (banshu provider id, models.dev provider key).
 const PROVIDERS: &[(&str, &str)] = &[
@@ -99,12 +103,73 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("verify-release-package") => {
+            if let Err(err) = verify_release_package() {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
+        }
         other => {
             eprintln!("unknown command: {other:?}");
-            eprintln!("usage: cargo run -p xtask -- generate-catalog [--input <api.json>]");
+            eprintln!(
+                "usage: cargo run -p xtask -- <generate-catalog [--input <api.json>]|verify-release-package>"
+            );
             std::process::exit(2);
         }
     }
+}
+
+fn verify_release_package() -> Result<(), Box<dyn std::error::Error>> {
+    let workspace_root = workspace_root();
+    let metadata = Command::new(env!("CARGO"))
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(&workspace_root)
+        .output()?;
+    if !metadata.status.success() {
+        return Err(format!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&metadata.stderr)
+        )
+        .into());
+    }
+
+    let metadata: Value = serde_json::from_slice(&metadata.stdout)?;
+    let target_directory = metadata["target_directory"]
+        .as_str()
+        .ok_or("cargo metadata omitted target_directory")?;
+    let package = metadata["packages"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"] == "banshu-ai")
+        })
+        .ok_or("cargo metadata omitted banshu-ai")?;
+    let version = package["version"]
+        .as_str()
+        .ok_or("cargo metadata omitted the banshu-ai version")?;
+    let manifest = PathBuf::from(target_directory)
+        .join("package")
+        .join(format!("banshu-ai-{version}"))
+        .join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err(format!(
+            "{} does not exist; run cargo publish --dry-run first",
+            manifest.display()
+        )
+        .into());
+    }
+
+    let status = Command::new(env!("CARGO"))
+        .args(["test", "--manifest-path"])
+        .arg(&manifest)
+        .arg("--all-features")
+        .current_dir(&workspace_root)
+        .status()?;
+    if !status.success() {
+        return Err(format!("packaged crate tests failed with {status}").into());
+    }
+    Ok(())
 }
 
 fn generate_catalog(input: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {

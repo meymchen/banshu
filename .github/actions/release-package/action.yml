@@ -1,0 +1,27 @@
+name: Verify release package
+description: Audit the dependency graph, public API, and generated banshu-ai archive.
+
+runs:
+  using: composite
+  steps:
+    - run: diff -u README.md crates/ai/README.md
+      shell: bash
+    - run: cargo test -p xtask --test release_package
+      shell: bash
+    - name: Check dependency licenses
+      uses: EmbarkStudios/cargo-deny-action@v2
+      with:
+        command: check licenses
+    - name: Review the public API against 0.9.0
+      uses: obi1kenobi/cargo-semver-checks-action@v2
+      with:
+        package: banshu-ai
+        baseline-version: 0.9.0
+        feature-group: all-features
+        release-type: major
+        rust-toolchain: manual
+    - run: cargo publish --dry-run -p banshu-ai --all-features
+      shell: bash
+    - name: Verify examples and Context fixture from the package
+      run: cargo run -p xtask -- verify-release-package
+      shell: bash
