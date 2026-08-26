@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
+include = [
+    "CHANGELOG.md",
+    "README.md",
+    "examples/*.rs",
+    "src/**",
+    "tests/context_serde.rs",
+    "tests/fixtures/context.json",
+]
 
 [features]
 default = ["rustls"]

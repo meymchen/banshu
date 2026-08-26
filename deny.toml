@@ -1,0 +1,17 @@
+[licenses]
+# Every dependency must offer a permissive license compatible with distributing
+# banshu-ai under MIT OR Apache-2.0. Keep this list explicit so a new license is
+# a reviewed release decision rather than an unnoticed transitive change.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
