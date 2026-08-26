@@ -2,12 +2,21 @@
 # Install the git hook once with `prek install`; run against the whole tree
 # with `prek run --all-files`.
 #
-# These hooks mirror the CI "Rustfmt & Clippy" job (`.github/workflows/ci.yml`)
-# exactly, except they fix instead of only checking: a hook that modifies
-# files fails the commit, but the fixes are already on disk — re-stage
-# (`git add -u`) and retry. Both run at pre-commit, so lint failures surface
-# at commit time, not in CI.
+# The two Rust hooks mirror the CI "Rustfmt & Clippy" job
+# (`.github/workflows/ci.yml`) exactly, except they fix instead of only
+# checking: a hook that modifies files fails the commit, but the fixes are
+# already on disk — re-stage (`git add -u`) and retry. All hooks run at
+# pre-commit, so lint failures surface before CI.
 repos:
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.23.1
+    hooks:
+      - id: markdownlint-cli2
+        # The configuration owns the user-facing document allowlist. CLI file
+        # arguments are additive, so do not pass every staged Markdown file.
+        pass_filenames: false
+        stages: [pre-commit]
+
   - repo: local
     hooks:
       - id: cargo-fmt

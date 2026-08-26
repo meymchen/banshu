@@ -17,6 +17,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  markdown:
+    name: Markdown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: npx --yes markdownlint-cli2@0.23.1
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v0.23.1/schema/markdownlint-cli2-config-schema.json",
+
+  // Lint only Markdown intended for project users and contributors. Agent
+  // instructions, domain context, ADRs, and generated changelogs are excluded
+  // by using an explicit allowlist instead of a repository-wide glob.
+  "globs": [
+    "README.md",
+    "crates/*/README.md",
+    "docs/*.md"
+  ],
+
+  "config": {
+    "default": true,
+
+    // Prose is wrapped where practical, but tables and complete URLs should
+    // remain readable and stable instead of satisfying a hard source limit.
+    "MD013": false
+  },
+
+  "noProgress": true
+}
