@@ -15,7 +15,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const BASIC_MAX_TOKENS: u32 = 64;
 const EXTENDED_MAX_TOKENS: u32 = 1_024;
 const TOOL_MAX_TOKENS: u32 = 512;
-const TOOL_RESULT_MAX_TOKENS: u32 = 128;
+const TOOL_RESULT_MAX_TOKENS: u32 = 512;
 const ECHO_VALUE: &str = "banshu-smoke";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -337,7 +337,7 @@ async fn run_tool_round_trip(
     let context = Context::new()
         .with_system("Follow the tool instruction exactly.")
         .user(format!(
-            "Call the echo tool exactly once with value `{ECHO_VALUE}`. Do not answer directly."
+            "Call the echo tool exactly once with value `{ECHO_VALUE}`. Do not answer before calling it."
         ))
         .with_tool(echo.clone());
     let tool_choice = match provider_id {
@@ -384,7 +384,8 @@ async fn run_tool_round_trip(
 
     let mut follow_up = context
         .with_message(Message::Assistant(Box::new(first.message)))
-        .tool_result(&call.id, &call.name, ECHO_VALUE);
+        .tool_result(&call.id, &call.name, ECHO_VALUE)
+        .user("Now reply with exactly the tool result value.");
     follow_up.tools.clear();
     let second = run_stream(
         provider,
