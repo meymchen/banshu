@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   # Mirror the checks that make the published package safe to consume. Keeping
   # this gate in the release workflow prevents publication from racing CI.
