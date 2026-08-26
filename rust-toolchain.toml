@@ -1,7 +1,5 @@
-# Pin the local toolchain to the one CI's "Rustfmt & Clippy" job uses
-# (dtolnay/rust-toolchain@stable), so prek hooks and CI run the same rustfmt
-# and clippy — a newer stable's lints and formatting never surprise CI.
-# The MSRV job overrides this with its explicit 1.96.0 toolchain.
+# Keep local development, prek hooks, CI, and release checks on the crate's
+# declared MSRV so a newer stable's lints and formatting never surprise CI.
 [toolchain]
-channel = "stable"
+channel = "1.98.0"
 components = ["rustfmt", "clippy"]

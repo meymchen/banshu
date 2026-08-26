@@ -1,9 +1,9 @@
 //! Content blocks that make up message bodies.
 //!
-//! JSON shapes follow the pi-ai persistence contract: blocks are internally
-//! tagged by `type` (`text` / `thinking` / `image` / `toolCall`), fields are
-//! camelCase, and signatures use pi's `textSignature` / `thinkingSignature`
-//! names. See `tests/fixtures/context_snapshot_v1.json`.
+//! JSON blocks are internally tagged by `type` (`text` / `thinking` / `image`
+//! / `toolCall`), fields are camelCase, and signatures use the
+//! `textSignature` / `thinkingSignature` names. See
+//! `tests/fixtures/context.json`.
 
 /// A run of plain text.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

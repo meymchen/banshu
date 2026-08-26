@@ -69,13 +69,6 @@ pub enum Error {
     /// A JSON (de)serialization error.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
-
-    /// A persisted context snapshot carries a version this crate cannot read.
-    #[error("unsupported context snapshot version {found} (expected 1)")]
-    UnsupportedSnapshotVersion {
-        /// The version the snapshot declared.
-        found: u32,
-    },
 }
 
 /// Convenience alias for results carrying a [`banshu-ai`](crate) [`Error`].

@@ -1,6 +1,4 @@
 {
-  "version": 1,
-  "context": {
     "systemPrompt": "You are terse.",
     "messages": [
       {
@@ -115,5 +113,4 @@
         }
       }
     ]
-  }
 }

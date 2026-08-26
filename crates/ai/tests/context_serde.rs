@@ -1,16 +1,12 @@
-//! Stable serde for conversation types + `ContextSnapshotV1` (issue #10).
-//!
-//! The checked-in fixture `tests/fixtures/context_snapshot_v1.json` is a
-//! persistence contract: once published, any change that breaks reading it is
-//! a breaking format change and needs a new snapshot version.
+//! Current serde shapes for conversation types.
 
 use banshu_ai::{
-    ApiKind, AssistantContent, AssistantMessage, Context, ContextSnapshotV1, Cost, Diagnostic,
-    DiagnosticCode, ErrorKind, ImageContent, Message, Modality, StopReason, TextContent,
-    ThinkingContent, Tool, ToolCall, ToolResultMessage, Usage, UserContent, UserMessage,
+    ApiKind, AssistantContent, AssistantMessage, Context, Cost, Diagnostic, DiagnosticCode,
+    ErrorKind, ImageContent, Message, Modality, StopReason, TextContent, ThinkingContent, Tool,
+    ToolCall, ToolResultMessage, Usage, UserContent, UserMessage,
 };
 
-const FIXTURE: &str = include_str!("fixtures/context_snapshot_v1.json");
+const FIXTURE: &str = include_str!("fixtures/context.json");
 
 /// The in-memory value the golden fixture encodes, covering every message
 /// variant and every content-block variant.
@@ -143,17 +139,16 @@ fn fixture_context() -> Context {
     }
 }
 
-/// The fixture context, serialized through `ContextSnapshotV1`.
-fn fixture_snapshot_value() -> serde_json::Value {
-    serde_json::to_value(ContextSnapshotV1::new(fixture_context())).expect("serialize")
+fn fixture_context_value() -> serde_json::Value {
+    serde_json::to_value(fixture_context()).expect("serialize")
 }
 
 #[test]
 fn round_trips_every_message_and_content_variant() {
-    let snapshot = ContextSnapshotV1::new(fixture_context());
-    let json = serde_json::to_string(&snapshot).expect("serialize");
-    let restored: ContextSnapshotV1 = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(snapshot, restored);
+    let context = fixture_context();
+    let json = serde_json::to_string(&context).expect("serialize");
+    let restored: Context = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(context, restored);
 }
 
 #[test]
@@ -163,9 +158,9 @@ fn round_trips_an_error_tool_result() {
         "get_weather",
         "city not found",
     )));
-    let json = serde_json::to_string(&ContextSnapshotV1::new(context.clone())).expect("serialize");
-    let restored: ContextSnapshotV1 = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(restored.context, context);
+    let json = serde_json::to_string(&context).expect("serialize");
+    let restored: Context = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(restored, context);
     assert!(json.contains("\"isError\":true"));
 }
 
@@ -174,17 +169,15 @@ fn raw_stop_reason_uses_an_optional_camel_case_extension_field() {
     let mut assistant = AssistantMessage::from_content(Vec::new());
     assistant.stop_reason = StopReason::Unknown;
     assistant.raw_stop_reason = Some("provider_future_reason".to_string());
-    let snapshot = ContextSnapshotV1::new(
-        Context::new().with_message(Message::Assistant(Box::new(assistant))),
-    );
+    let context = Context::new().with_message(Message::Assistant(Box::new(assistant)));
 
-    let value = serde_json::to_value(&snapshot).expect("serialize");
+    let value = serde_json::to_value(&context).expect("serialize");
     assert_eq!(
-        value["context"]["messages"][0]["rawStopReason"],
+        value["messages"][0]["rawStopReason"],
         serde_json::json!("provider_future_reason")
     );
-    let restored: ContextSnapshotV1 = serde_json::from_value(value).expect("deserialize");
-    let Message::Assistant(message) = &restored.context.messages[0] else {
+    let restored: Context = serde_json::from_value(value).expect("deserialize");
+    let Message::Assistant(message) = &restored.messages[0] else {
         panic!("expected assistant message");
     };
     assert_eq!(message.stop_reason, StopReason::Unknown);
@@ -196,82 +189,25 @@ fn raw_stop_reason_uses_an_optional_camel_case_extension_field() {
 
 #[test]
 fn golden_fixture_deserializes_to_the_expected_value() {
-    let snapshot: ContextSnapshotV1 = serde_json::from_str(FIXTURE).expect("fixture deserializes");
-    assert_eq!(snapshot.version, 1);
-    assert_eq!(snapshot.context, fixture_context());
+    let context: Context = serde_json::from_str(FIXTURE).expect("fixture deserializes");
+    assert_eq!(context, fixture_context());
 }
 
 #[test]
 fn golden_fixture_matches_serialized_output() {
     let fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture parses");
-    assert_eq!(fixture_snapshot_value(), fixture);
-}
-
-#[test]
-fn new_always_writes_version_1() {
-    let snapshot = ContextSnapshotV1::new(Context::new());
-    assert_eq!(snapshot.version, 1);
-    let value = serde_json::to_value(&snapshot).expect("serialize");
-    assert_eq!(value["version"], serde_json::json!(1));
-}
-
-#[test]
-fn rejects_unknown_snapshot_versions() {
-    for version in [0u32, 2, 7] {
-        let json = format!("{{\"version\":{version},\"context\":{{\"messages\":[]}}}}");
-        let error = serde_json::from_str::<ContextSnapshotV1>(&json)
-            .expect_err("unknown version must be rejected");
-        let message = error.to_string();
-        assert!(
-            message.contains(&format!("version {version}")) && message.contains("expected 1"),
-            "error should name the offending version, got: {message}"
-        );
-    }
-}
-
-#[test]
-fn rejects_unknown_versions_even_with_incompatible_context_shapes() {
-    // A future version's context may not parse as today's `Context`; the
-    // version check must win over any shape error.
-    let json = r#"{"version":3,"context":{"totally":"different"}}"#;
-    let error = serde_json::from_str::<ContextSnapshotV1>(json)
-        .expect_err("unknown version must be rejected");
-    assert!(error.to_string().contains("version 3"));
-}
-
-#[test]
-fn from_json_reports_unsupported_versions_as_typed_errors() {
-    let error = ContextSnapshotV1::from_json(r#"{"version":4,"context":{"whatever":true}}"#)
-        .expect_err("unknown version must be rejected");
-    assert!(matches!(
-        error,
-        banshu_ai::Error::UnsupportedSnapshotVersion { found: 4 }
-    ));
-
-    // Corrupt JSON and shape errors stay ordinary JSON errors.
-    assert!(matches!(
-        ContextSnapshotV1::from_json("not json").expect_err("must fail"),
-        banshu_ai::Error::Json(_)
-    ));
-
-    // And the happy path parses.
-    let snapshot =
-        ContextSnapshotV1::from_json(FIXTURE).expect("current version parses via from_json");
-    assert_eq!(snapshot.context, fixture_context());
+    assert_eq!(fixture_context_value(), fixture);
 }
 
 #[test]
 fn accepts_pi_style_string_user_content() {
     let json = r#"{
-        "version": 1,
-        "context": {
-            "messages": [
-                { "role": "user", "content": "hello there", "timestamp": 1752900005000 }
-            ]
-        }
+        "messages": [
+            { "role": "user", "content": "hello there", "timestamp": 1752900005000 }
+        ]
     }"#;
-    let snapshot: ContextSnapshotV1 = serde_json::from_str(json).expect("deserialize");
-    match &snapshot.context.messages[0] {
+    let context: Context = serde_json::from_str(json).expect("deserialize");
+    match &context.messages[0] {
         Message::User(user) => {
             assert_eq!(
                 user.content,
@@ -287,8 +223,8 @@ fn accepts_pi_style_string_user_content() {
 
 #[test]
 fn message_role_tags_use_the_stable_vocabulary() {
-    let value = fixture_snapshot_value();
-    let roles: Vec<&str> = value["context"]["messages"]
+    let value = fixture_context_value();
+    let roles: Vec<&str> = value["messages"]
         .as_array()
         .expect("messages array")
         .iter()
@@ -299,8 +235,8 @@ fn message_role_tags_use_the_stable_vocabulary() {
 
 #[test]
 fn content_type_tags_use_the_stable_vocabulary() {
-    let value = fixture_snapshot_value();
-    let types: Vec<&str> = value["context"]["messages"][1]["content"]
+    let value = fixture_context_value();
+    let types: Vec<&str> = value["messages"][1]["content"]
         .as_array()
         .expect("content array")
         .iter()
@@ -308,7 +244,7 @@ fn content_type_tags_use_the_stable_vocabulary() {
         .collect();
     assert_eq!(types, ["thinking", "text", "toolCall"]);
     assert_eq!(
-        value["context"]["messages"][0]["content"][1]["type"],
+        value["messages"][0]["content"][1]["type"],
         serde_json::json!("image")
     );
 }
@@ -365,8 +301,7 @@ fn enums_serialize_to_stable_string_values() {
 
 #[test]
 fn external_json_is_camel_case() {
-    let value = fixture_snapshot_value();
-    let context = &value["context"];
+    let context = fixture_context_value();
     assert!(context.get("systemPrompt").is_some());
 
     let assistant = &context["messages"][1];
@@ -399,14 +334,14 @@ fn external_json_is_camel_case() {
 
 #[test]
 fn optional_fields_are_omitted_when_absent() {
-    let value = fixture_snapshot_value();
+    let value = fixture_context_value();
 
     // User text block without a signature carries no signature key.
-    let user_text = &value["context"]["messages"][0]["content"][0];
+    let user_text = &value["messages"][0]["content"][0];
     assert!(user_text.get("textSignature").is_none());
 
     // Failed assistant has no response metadata and empty diagnostics.
-    let failed = &value["context"]["messages"][3];
+    let failed = &value["messages"][3];
     assert!(failed.get("responseModel").is_none());
     assert!(failed.get("responseId").is_none());
     assert!(failed.get("rawStopReason").is_none());
@@ -415,38 +350,32 @@ fn optional_fields_are_omitted_when_absent() {
     assert!(failed["usage"].get("reasoning").is_none());
 
     // Non-redacted thinking omits the `redacted` flag (pi-ai shape).
-    let thinking = &value["context"]["messages"][1]["content"][0];
+    let thinking = &value["messages"][1]["content"][0];
     assert!(thinking.get("redacted").is_none());
 
     // An empty context serializes to just its messages.
-    let empty = serde_json::to_value(ContextSnapshotV1::new(Context::new())).unwrap();
-    assert_eq!(
-        empty,
-        serde_json::json!({ "version": 1, "context": { "messages": [] } })
-    );
+    let empty = serde_json::to_value(Context::new()).unwrap();
+    assert_eq!(empty, serde_json::json!({ "messages": [] }));
 }
 
 #[test]
 fn omitted_optional_fields_deserialize_to_defaults() {
     let json = r#"{
-        "version": 1,
-        "context": {
-            "messages": [
-                {
-                    "role": "toolResult",
-                    "toolCallId": "call_2",
-                    "toolName": "noop",
-                    "content": [{ "type": "text", "text": "ok" }],
-                    "isError": false,
-                    "timestamp": 1752900004000
-                }
-            ]
-        }
+        "messages": [
+            {
+                "role": "toolResult",
+                "toolCallId": "call_2",
+                "toolName": "noop",
+                "content": [{ "type": "text", "text": "ok" }],
+                "isError": false,
+                "timestamp": 1752900004000
+            }
+        ]
     }"#;
-    let snapshot: ContextSnapshotV1 = serde_json::from_str(json).expect("deserialize");
-    assert_eq!(snapshot.context.system_prompt, None);
-    assert!(snapshot.context.tools.is_empty());
-    match &snapshot.context.messages[0] {
+    let context: Context = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(context.system_prompt, None);
+    assert!(context.tools.is_empty());
+    match &context.messages[0] {
         Message::ToolResult(result) => {
             assert_eq!(result.tool_call_id, "call_2");
             assert_eq!(

@@ -9,17 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- *(ai)* [**breaking**] re-freeze the planned 1.0 stream and open-model
-  compatibility contract, with complete bundled-provider declarations and
-  compile-checked custom-provider migration guidance ([#97](https://github.com/meymchen/banshu/issues/97))
+- *(ai)* add complete bundled-provider declarations for stream and open-model
+  request behavior ([#97](https://github.com/meymchen/banshu/issues/97))
 
 ### Changed
 
-- **Breaking:** `AssistantMessageEvent::Start` now carries the pending
-  `AssistantMessage`; custom compatibility literals must use the new
-  cache-routing, request-envelope, termination, tool-history, reasoning,
-  sampling, and Anthropic temperature declarations. See
-  `docs/migration-1.0.md`.
+- `AssistantMessageEvent::Start` carries the pending `AssistantMessage`.
+- Persist conversation state by serializing `Context` directly.
 
 ## [0.9.0](https://github.com/meymchen/banshu/compare/v0.8.0...v0.9.0) - 2026-08-25
 
@@ -106,16 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - pluggable auth adapters — api_key_env, keyless, custom AuthResolver ([#29](https://github.com/meymchen/banshu/pull/29))
 - [**breaking**] contract the MessageStream API ([#15](https://github.com/meymchen/banshu/pull/15)) ([#28](https://github.com/meymchen/banshu/pull/28))
 - Anthropic adapter on ProtocolEvent + MessageAssembler ([#14](https://github.com/meymchen/banshu/pull/14)) ([#27](https://github.com/meymchen/banshu/pull/27))
-- ProtocolEvent + MessageAssembler (expand phase) — OpenAI adapter migrated ([#26](https://github.com/meymchen/banshu/pull/26))
+- OpenAI adapter on ProtocolEvent + MessageAssembler ([#26](https://github.com/meymchen/banshu/pull/26))
 - SSE decoder + shared RequestExecutor (#11, #12) ([#25](https://github.com/meymchen/banshu/pull/25))
-- [**breaking**] stable serde for conversation types + ContextSnapshotV1 with golden fixtures ([#24](https://github.com/meymchen/banshu/pull/24))
+- [**breaking**] stable serde for conversation types with golden fixtures ([#24](https://github.com/meymchen/banshu/pull/24))
 - [**breaking**] add conversation domain groundwork ([#9](https://github.com/meymchen/banshu/pull/9))
 - dynamic model discovery via models.dev refresh + vendor /models probes ([#8](https://github.com/meymchen/banshu/pull/8))
 - thinking signature replay + per-provider compat flags ([#7](https://github.com/meymchen/banshu/pull/7))
 
 ### Other
 
-- rustdoc release gates + drop unshipped migration doc ([#23](https://github.com/meymchen/banshu/pull/23)) ([#36](https://github.com/meymchen/banshu/pull/36))
+- rustdoc release gates ([#23](https://github.com/meymchen/banshu/pull/23)) ([#36](https://github.com/meymchen/banshu/pull/36))
 - release v0.1.0 ([#5](https://github.com/meymchen/banshu/pull/5))
 
 ## [0.1.0](https://github.com/meymchen/banshu/releases/tag/v0.1.0) - 2026-07-18

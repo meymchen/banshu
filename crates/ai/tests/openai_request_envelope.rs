@@ -4,9 +4,8 @@
 //! accepts: whether streamed usage may be requested
 //! (`OpenAiCompat::streamed_usage`) and which standard output-token field
 //! carries the resolved Output Budget (`OpenAiCompat::output_token_field`).
-//! The undeclared default stays byte-compatible with the request bodies
-//! bundled providers have always sent: `stream_options.include_usage` is
-//! requested and `max_tokens` carries the budget.
+//! The default requests `stream_options.include_usage` and carries the budget
+//! in `max_tokens`.
 
 use std::sync::{Arc, Mutex};
 

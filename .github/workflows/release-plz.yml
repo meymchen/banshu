@@ -6,9 +6,32 @@ on:
       - main
 
 jobs:
+  # Mirror the checks that make the published package safe to consume. Keeping
+  # this gate in the release workflow prevents publication from racing CI.
+  pre-release:
+    name: Pre-release checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+      - run: cargo test --workspace --all-features
+      - run: cargo doc --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: diff -u README.md crates/ai/README.md
+      - run: cargo publish --dry-run -p banshu-ai --all-features
+
   # Publish unreleased packages and create git tags / GitHub releases.
   release-plz-release:
     name: Release-plz release
+    needs: pre-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -20,7 +43,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
@@ -46,7 +69,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.98.0
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:

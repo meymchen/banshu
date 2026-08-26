@@ -154,9 +154,8 @@ declared; an endpoint without the declaration gets no `stream_options` field
 at all, and usage it reports anyway is still parsed) and which standard
 output-token field carries the resolved Output Budget (a closed policy over
 `max_tokens` and `max_completion_tokens` — exactly the selected field is sent,
-the other is absent). The undeclared default requests streamed usage and caps
-with `max_tokens`, byte-compatible with the request bodies bundled providers
-have always sent.
+the other is absent). The default requests streamed usage and caps with
+`max_tokens`.
 _Avoid_: wire envelope, request framing
 
 **Stream Termination** (`OpenAiCompat::stream_termination`,
@@ -183,8 +182,7 @@ message (`{ "role": "assistant", "content": "" }`) separates a run of tool
 results from a following user message. The separator fires only at a tool-run
 → user boundary — never between consecutive tool results, never twice in a
 row, and ahead of the image-carrier user message that trails a run holding
-images, which is such a boundary. The undeclared default sends neither,
-byte-compatible with the request bodies bundled providers have always sent.
+images, which is such a boundary. The default sends neither.
 _Avoid_: tool message quirks, chat-template fixes
 
 **Cache-routing wire policies** (`OpenAiCompat::session_affinity`,
@@ -200,8 +198,7 @@ credential headers. Cache retention attests the endpoint honours
 `prompt_cache_retention: "24h"`: a `Short` request keeps the endpoint's normal
 cache behavior, and an explicit `CacheRetention::Long` against an unattesting
 provider is refused in-band with `InvalidRequest` before any HTTP request. The
-undeclared defaults send no cache-routing field or header, byte-compatible
-with the request bodies bundled providers have always sent.
+defaults send no cache-routing field or header.
 _Avoid_: cache quirks, session stickiness
 
 **Anthropic cache wire policies** (`AnthropicCompat::cache_retention`,
@@ -363,7 +360,7 @@ when the provider declares strict tool schemas
 `AnthropicCompat::strict_tool_schemas`); otherwise the field is omitted
 entirely and the tool works unconstrained. Declared by OpenAI, Moonshot, and
 Xiaomi MiMo. The marker is skipped in serialized `Tool` JSON when `false`, so
-Context Snapshots written before it existed stay byte-identical.
+the field is absent from the JSON shape.
 _Avoid_: constrained sampling flag
 
 **Reasoning Effort** (`ReasoningEffort`):
@@ -585,9 +582,3 @@ no client constructs the crate's feature-selected default. An OAuth Session
 captured its client at construction and is not retargeted by a later
 replacement.
 _Avoid_: transport config, shared client
-
-**Context Snapshot** (`ContextSnapshotV1`):
-The versioned JSON persistence format for a `Context`, pinned by a golden
-fixture. The serialized shape (camelCase, `role`/`type` tags) is a published
-contract compatible with pi-ai; a snapshot declaring an unknown version is
-rejected outright, never parsed best-effort.

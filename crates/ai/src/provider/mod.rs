@@ -601,8 +601,8 @@ pub struct OpenAiCompat {
     /// Whether the endpoint accepts `stream_options: { "include_usage": true }`,
     /// the request for usage to arrive as a streamed chunk.
     ///
-    /// The default is `true`, keeping the undeclared path byte-compatible with
-    /// the request bodies bundled providers have always sent. Declare `false`
+    /// The default is `true`, so usage is requested unless the endpoint
+    /// explicitly opts out. Declare `false`
     /// for an endpoint that rejects or ignores `stream_options`: the adapter
     /// then omits the field entirely rather than sending an envelope the
     /// endpoint does not accept. Usage reported anyway — as a final streamed

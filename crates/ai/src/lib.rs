@@ -1,7 +1,6 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
-#![doc = include_str!("../../../README.md")]
-#![doc = include_str!("../../../docs/migration-1.0.md")]
+#![doc = include_str!("../README.md")]
 //! # banshu-ai
 //!
 //! Unified LLM API with automatic model discovery and provider configuration.

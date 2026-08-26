@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -19,7 +23,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
@@ -28,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -39,10 +43,20 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
   msrv:
-    name: MSRV (1.96)
+    name: MSRV (1.98.0)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: dtolnay/rust-toolchain@1.98.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-features
+
+  package:
+    name: Package dry run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - run: diff -u README.md crates/ai/README.md
+      - run: cargo publish --dry-run -p banshu-ai --all-features

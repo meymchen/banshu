@@ -4,9 +4,8 @@
 //! chat template requires: whether each `tool` message carries the tool's
 //! `name` (`OpenAiCompat::tool_result_names`) and whether an empty assistant
 //! message separates a run of tool results from a following user message
-//! (`OpenAiCompat::empty_assistant_separator`). The undeclared default stays
-//! byte-compatible with the request bodies bundled providers have always sent:
-//! no names, no separator.
+//! (`OpenAiCompat::empty_assistant_separator`). The default sends no names and
+//! no separator.
 
 use std::sync::{Arc, Mutex};
 

@@ -28,8 +28,7 @@ pub struct Tool {
     /// against a provider declaring no support the field is omitted entirely,
     /// and the tool works unconstrained.
     ///
-    /// Skipped on serialization when `false`, so a context snapshot written
-    /// before the marker existed is byte-identical to one written after.
+    /// Skipped on serialization when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strict: bool,
 }

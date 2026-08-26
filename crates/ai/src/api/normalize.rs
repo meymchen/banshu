@@ -352,7 +352,7 @@ fn rewrite_tool_call_id(id: &str) -> Option<String> {
 }
 
 /// FNV-1a 64-bit — a small, stable hash with no dependency, so rewritten ids
-/// are identical across processes and crate versions.
+/// are identical across processes.
 fn fnv1a64(bytes: &[u8]) -> u64 {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
