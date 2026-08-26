@@ -103,6 +103,34 @@ pub enum OpenAiCacheRetention {
     Long,
 }
 
+/// The prompt-cache retention an Anthropic-compatible endpoint accepts.
+///
+/// Declared independently from tool-definition cache control
+/// ([`AnthropicCompat::tool_cache_control`]): an endpoint may cache tool
+/// definitions without accepting a longer TTL, and the two policies compose
+/// freely. Every provider states its own — nothing is inferred from a base
+/// URL or a model id.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnthropicCacheRetention {
+    /// Only the endpoint's normal ephemeral breakpoints. A
+    /// [`Short`](crate::CacheRetention::Short) request — or no retention
+    /// preference at all — goes out as `cache_control: { "type": "ephemeral" }`,
+    /// while an explicit [`Long`](crate::CacheRetention::Long) request is
+    /// refused in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request. The default, because an unconfigured endpoint
+    /// attests nothing.
+    #[default]
+    Short,
+    /// The provider attests its endpoint honours Anthropic's one-hour
+    /// cache-control TTL, so an explicit [`Long`](crate::CacheRetention::Long)
+    /// request emits `cache_control: { "type": "ephemeral", "ttl": "1h" }`
+    /// on every breakpoint instead of being refused.
+    ///
+    /// Declared by [`Provider::kimi`] and [`Provider::minimax`].
+    Long,
+}
+
 /// A documented token-budget keyword accepted by open-model chat templates.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -599,6 +627,16 @@ pub struct AnthropicCompat {
     /// Send `x-session-affinity` from the session id when caching is enabled,
     /// for providers that route prompt-cache hits by replica.
     pub send_session_affinity_headers: bool,
+    /// The prompt-cache retention this endpoint accepts. See
+    /// [`AnthropicCacheRetention`]; the default refuses an explicit
+    /// long-retention request before dispatch.
+    pub cache_retention: AnthropicCacheRetention,
+    /// The endpoint accepts `cache_control` on tool definitions, so the last
+    /// tool carries a breakpoint that caches the whole definition list. The
+    /// default attaches no tool breakpoint — an unconfigured endpoint attests
+    /// nothing — while system and message breakpoints are unaffected either
+    /// way: suppressing tool cache control never disables caching elsewhere.
+    pub tool_cache_control: bool,
     /// The reasoning request shape this endpoint accepts.
     pub reasoning_format: AnthropicReasoningFormat,
     /// The tool choices this endpoint accepts in a request. See
@@ -854,6 +892,10 @@ impl Provider {
     /// Tool choice: the reference declares `tool_choice` fully supported, so
     /// all four choices are declared; strict tool schemas appear nowhere in
     /// it, so they are not.
+    ///
+    /// Caching: the one-hour cache-control TTL and tool-definition
+    /// breakpoints are declared, keeping the cache shape this provider has
+    /// always sent.
     pub fn minimax(region: crate::MiniMaxRegion, store: Arc<dyn crate::CredentialStore>) -> Self {
         let provider = Self::anthropic_compatible(
             region.provider_id(),
@@ -862,6 +904,8 @@ impl Provider {
             ["MINIMAX_API_KEY"],
         )
         .with_anthropic_compat(AnthropicCompat {
+            cache_retention: AnthropicCacheRetention::Long,
+            tool_cache_control: true,
             reasoning_format: AnthropicReasoningFormat::ThinkingAdaptive,
             tool_choice: ToolChoiceSupport::ALL,
             ..AnthropicCompat::default()
@@ -925,6 +969,10 @@ impl Provider {
     /// Tool choice: none declared — Kimi publishes no parameter-level
     /// reference for the coding endpoint's Anthropic shape, so an explicit
     /// choice is refused rather than sent on a guess.
+    ///
+    /// Caching: the one-hour cache-control TTL and tool-definition
+    /// breakpoints are declared, keeping the cache shape this provider has
+    /// always sent.
     pub fn kimi(store: Arc<dyn crate::CredentialStore>) -> Self {
         let provider = Self::anthropic_compatible(
             "kimi",
@@ -933,6 +981,8 @@ impl Provider {
             ["KIMI_API_KEY"],
         )
         .with_anthropic_compat(AnthropicCompat {
+            cache_retention: AnthropicCacheRetention::Long,
+            tool_cache_control: true,
             reasoning_format: AnthropicReasoningFormat::ThinkingToggle,
             ..AnthropicCompat::default()
         })

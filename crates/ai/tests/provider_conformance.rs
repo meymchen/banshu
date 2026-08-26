@@ -7,9 +7,10 @@
 use std::sync::{Arc, Mutex};
 
 use banshu_ai::{
-    AnthropicReasoningFormat, ApiKind, InMemoryCredentialStore, MiniMaxRegion,
-    OpenAiCacheRetention, OpenAiOutputTokenField, OpenAiReasoningFormat, OpenAiSessionAffinity,
-    OpenAiStreamTermination, Provider, ReasoningEffort, ToolChoice, ToolChoiceSupport,
+    AnthropicCacheRetention, AnthropicReasoningFormat, ApiKind, InMemoryCredentialStore,
+    MiniMaxRegion, OpenAiCacheRetention, OpenAiOutputTokenField, OpenAiReasoningFormat,
+    OpenAiSessionAffinity, OpenAiStreamTermination, Provider, ReasoningEffort, ToolChoice,
+    ToolChoiceSupport,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -24,6 +25,8 @@ struct ProviderExpectation {
     oauth: bool,
     openai_reasoning: OpenAiReasoningFormat,
     anthropic_reasoning: AnthropicReasoningFormat,
+    anthropic_cache_retention: AnthropicCacheRetention,
+    anthropic_tool_cache: bool,
     efforts: Option<&'static [ReasoningEffort]>,
     tool_choice: ToolChoiceSupport,
     strict_tools: bool,
@@ -41,6 +44,8 @@ fn providers() -> [ProviderExpectation; 7] {
             oauth: false,
             openai_reasoning: OpenAiReasoningFormat::ThinkingToggle,
             anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
+            anthropic_cache_retention: AnthropicCacheRetention::Short,
+            anthropic_tool_cache: false,
             efforts: Some(&[
                 ReasoningEffort::Off,
                 ReasoningEffort::Low,
@@ -65,6 +70,8 @@ fn providers() -> [ProviderExpectation; 7] {
             oauth: false,
             openai_reasoning: OpenAiReasoningFormat::ThinkingToggleOnly,
             anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
+            anthropic_cache_retention: AnthropicCacheRetention::Short,
+            anthropic_tool_cache: false,
             efforts: None,
             tool_choice: ToolChoiceSupport {
                 auto: true,
@@ -82,6 +89,8 @@ fn providers() -> [ProviderExpectation; 7] {
             oauth: false,
             openai_reasoning: OpenAiReasoningFormat::Unsupported,
             anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
+            anthropic_cache_retention: AnthropicCacheRetention::Short,
+            anthropic_tool_cache: false,
             efforts: Some(&[]),
             tool_choice: ToolChoiceSupport::ALL,
             strict_tools: true,
@@ -96,6 +105,8 @@ fn providers() -> [ProviderExpectation; 7] {
             oauth: false,
             openai_reasoning: OpenAiReasoningFormat::ThinkingToggleOnly,
             anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
+            anthropic_cache_retention: AnthropicCacheRetention::Short,
+            anthropic_tool_cache: false,
             efforts: None,
             tool_choice: ToolChoiceSupport {
                 auto: true,
@@ -113,6 +124,8 @@ fn providers() -> [ProviderExpectation; 7] {
             oauth: true,
             openai_reasoning: OpenAiReasoningFormat::Unsupported,
             anthropic_reasoning: AnthropicReasoningFormat::ThinkingToggle,
+            anthropic_cache_retention: AnthropicCacheRetention::Long,
+            anthropic_tool_cache: true,
             efforts: None,
             tool_choice: ToolChoiceSupport::NONE,
             strict_tools: false,
@@ -132,6 +145,8 @@ fn providers() -> [ProviderExpectation; 7] {
             oauth: true,
             openai_reasoning: OpenAiReasoningFormat::Unsupported,
             anthropic_reasoning: AnthropicReasoningFormat::ThinkingAdaptive,
+            anthropic_cache_retention: AnthropicCacheRetention::Long,
+            anthropic_tool_cache: true,
             efforts: None,
             tool_choice: ToolChoiceSupport::ALL,
             strict_tools: false,
@@ -148,6 +163,8 @@ fn providers() -> [ProviderExpectation; 7] {
             oauth: true,
             openai_reasoning: OpenAiReasoningFormat::Unsupported,
             anthropic_reasoning: AnthropicReasoningFormat::ThinkingAdaptive,
+            anthropic_cache_retention: AnthropicCacheRetention::Long,
+            anthropic_tool_cache: true,
             efforts: None,
             tool_choice: ToolChoiceSupport::ALL,
             strict_tools: false,
@@ -199,6 +216,20 @@ fn bundled_providers_match_the_frozen_matrix() {
         );
         assert_eq!(openai.reasoning_format, expected.openai_reasoning);
         assert_eq!(anthropic.reasoning_format, expected.anthropic_reasoning);
+        // Anthropic cache declarations: the bundled Anthropic-compatible
+        // providers (Kimi, MiniMax) attest the one-hour TTL and
+        // tool-definition breakpoints; every other provider keeps the
+        // undeclared defaults.
+        assert_eq!(
+            anthropic.cache_retention, expected.anthropic_cache_retention,
+            "{}: anthropic cache retention",
+            expected.id,
+        );
+        assert_eq!(
+            anthropic.tool_cache_control, expected.anthropic_tool_cache,
+            "{}: anthropic tool cache control",
+            expected.id,
+        );
         let (actual_efforts, actual_tool_choice, actual_strict) = match expected.api {
             ApiKind::OpenAiCompletions => (
                 openai.reasoning_efforts,

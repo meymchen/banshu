@@ -273,7 +273,9 @@ pub(crate) fn drive(
             yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
             return;
         }
-        if let Err(detail) = cache_routing::validate(&model, &options, openai_compat) {
+        if let Err(detail) =
+            cache_routing::validate(&model, &options, openai_compat, anthropic_compat)
+        {
             yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
             return;
         }

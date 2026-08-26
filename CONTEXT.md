@@ -204,6 +204,23 @@ undeclared defaults send no cache-routing field or header, byte-compatible
 with the request bodies bundled providers have always sent.
 _Avoid_: cache quirks, session stickiness
 
+**Anthropic cache wire policies** (`AnthropicCompat::cache_retention`,
+`AnthropicCompat::tool_cache_control`, `AnthropicCacheRetention`, issue #94):
+The prompt-cache shapes an Anthropic-compatible provider declares its endpoint
+accepts, as two independent declarations. Cache retention attests Anthropic's
+one-hour TTL: a `Short` request — or no preference at all — keeps
+`cache_control: { "type": "ephemeral" }` on the system and message
+breakpoints, a declared `Long` emits
+`cache_control: { "type": "ephemeral", "ttl": "1h" }` on every breakpoint,
+and an explicit `CacheRetention::Long` against an unattesting provider is
+refused in-band with `InvalidRequest` before any HTTP request. Tool cache
+control attests `cache_control` on tool definitions: declared, the last tool
+carries the breakpoint that caches the whole definition list; undeclared, no
+tool breakpoint is attached and the system and message breakpoints are
+unaffected. Kimi and MiniMax declare both, keeping the cache shape they have
+always sent; the undeclared defaults attest nothing.
+_Avoid_: cache quirks, TTL guessing
+
 **Context Overflow** (`ErrorKind::ContextOverflow`, `is_context_overflow`,
 issue #53):
 One classification over every provider signal that a request exceeded the
