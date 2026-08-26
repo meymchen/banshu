@@ -48,6 +48,35 @@ async fn main() {
 }
 ```
 
+## Live provider smoke tests
+
+From a repository checkout, export one or more provider API keys and run the
+live smoke test. It checks every configured provider and skips providers whose
+key is absent:
+
+```bash
+export DEEPSEEK_API_KEY="..."
+export KIMI_API_KEY="..."
+export MINIMAX_API_KEY="..."
+scripts/smoke-ai.sh
+```
+
+The defaults are `deepseek-v4-flash`, `k3-256k`, and `MiniMax-M3` on the
+MiniMax CN endpoint. Select one provider, override its bundled-catalog model,
+or add reasoning and a two-turn `echo` tool-call check with:
+
+```bash
+scripts/smoke-ai.sh --provider kimi
+scripts/smoke-ai.sh --provider deepseek --model deepseek-v4-pro
+scripts/smoke-ai.sh --provider minimax --extended
+```
+
+Use `--verbose` to print the request observer's redacted payload, URL, headers,
+and response metadata. Each live request has a 30-second timeout, zero retries,
+and a small output budget. The script never prints API keys and does not load
+`.env` automatically; [the repository `.env.example`](https://github.com/meymchen/banshu/blob/main/.env.example)
+lists the supported variables and model overrides.
+
 `Provider::deepseek`, `zai`, `moonshot`, and `xiaomi` use OpenAI Chat
 Completions. `Provider::kimi` and `minimax` use Anthropic Messages. The
 [provider conformance matrix](https://github.com/meymchen/banshu/blob/main/docs/provider-conformance.md) records the exact
