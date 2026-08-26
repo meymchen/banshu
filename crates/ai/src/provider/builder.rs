@@ -137,6 +137,12 @@ impl ProviderBuilder {
         if self.id.trim().is_empty() {
             return Err(Error::Config("provider id must not be empty".to_string()));
         }
+        if let Err(detail) = self.openai_compat.reasoning_format.validate() {
+            return Err(Error::Config(format!(
+                "provider `{}` has an invalid OpenAI reasoning declaration: {detail}",
+                self.id,
+            )));
+        }
         let Some(primary) = self.adapters.first().map(|adapter| adapter.kind()) else {
             return Err(Error::Config(format!(
                 "provider `{}` needs at least one protocol adapter",

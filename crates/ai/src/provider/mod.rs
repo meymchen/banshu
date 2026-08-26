@@ -103,18 +103,94 @@ pub enum OpenAiCacheRetention {
     Long,
 }
 
+/// A documented token-budget keyword accepted by open-model chat templates.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiReasoningBudgetField {
+    /// `thinking_token_budget`.
+    ThinkingTokenBudget,
+    /// `thinking_budget`.
+    ThinkingBudget,
+    /// `thinking_budget_tokens`.
+    ThinkingBudgetTokens,
+}
+
+impl OpenAiReasoningBudgetField {
+    /// The exact JSON field name put on the wire.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ThinkingTokenBudget => "thinking_token_budget",
+            Self::ThinkingBudget => "thinking_budget",
+            Self::ThinkingBudgetTokens => "thinking_budget_tokens",
+        }
+    }
+}
+
+/// Typed substitutions inside a `chat_template_kwargs` reasoning declaration.
+///
+/// Each optional string is the name of a keyword inside that object. The
+/// adapter owns the object and supplies only the corresponding typed request
+/// value: a boolean enabled state, the requested effort string, or the exact
+/// token budget. Callers cannot name an outer request path or supply arbitrary
+/// JSON values.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OpenAiChatTemplateKwargs {
+    /// Keyword receiving `true` for an enabled request and `false` for an
+    /// explicit [`ReasoningEffort::Off`] request.
+    pub enable_thinking: Option<&'static str>,
+    /// Keyword receiving the requested effort. When no enabled-state keyword
+    /// is declared, `Off` is spelled `"none"`; otherwise the boolean keyword
+    /// alone carries the disabled state.
+    pub reasoning_effort: Option<&'static str>,
+    /// Closed keyword name receiving an explicitly requested token budget.
+    pub token_budget: Option<OpenAiReasoningBudgetField>,
+}
+
+impl OpenAiChatTemplateKwargs {
+    fn validate(self) -> Result<(), String> {
+        let mut names = Vec::new();
+        if let Some(name) = self.enable_thinking {
+            names.push(name);
+        }
+        if let Some(name) = self.reasoning_effort {
+            names.push(name);
+        }
+        if let Some(field) = self.token_budget {
+            names.push(field.as_str());
+        }
+        if names.is_empty() {
+            return Err("chat_template_kwargs reasoning declaration carries no values".into());
+        }
+        if let Some(name) = names.iter().find(|name| name.trim().is_empty()) {
+            return Err(format!(
+                "chat_template_kwargs reasoning keyword `{name}` must not be empty"
+            ));
+        }
+        for (index, name) in names.iter().enumerate() {
+            if names[index + 1..].contains(name) {
+                return Err(format!(
+                    "chat_template_kwargs reasoning keyword `{name}` has contradictory substitutions"
+                ));
+            }
+        }
+        if self.enable_thinking.is_none() && self.reasoning_effort.is_none() {
+            return Err(
+                "chat_template_kwargs reasoning declaration cannot disable reasoning; declare an enabled-state or effort keyword"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 /// The reasoning request shape an OpenAI-compatible endpoint accepts.
 ///
 /// Every provider states its own — nothing is inferred from a base URL or a
 /// model id. A request the declared shape cannot carry is refused before
 /// dispatch rather than sent in a shape the endpoint would ignore or reject.
-///
-/// The shapes named here are the ones banshu's target providers document; no
-/// claim is made about any other endpoint that happens to speak
-/// `POST /chat/completions`. Each variant states the exact fields it puts on
-/// the wire, including the value it sends for
-/// [`ReasoningEffort::Off`] — disabling reasoning is an explicit request,
-/// never the absence of a field.
+/// Each variant describes wire behavior rather than naming a provider.
+/// [`ReasoningEffort::Off`] is always an explicit disabling request, never the
+/// absence of a field.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OpenAiReasoningFormat {
@@ -151,18 +227,36 @@ pub enum OpenAiReasoningFormat {
     /// [`reasoning_efforts`](OpenAiCompat::reasoning_efforts) vocabulary:
     /// with no effort field on the wire, there is no vocabulary to name.
     ThinkingToggleOnly,
+    /// A top-level `enable_thinking: true | false` boolean. Every enabled
+    /// effort maps to `true`; [`ReasoningEffort::Off`] maps to `false`.
+    EnableThinking,
+    /// Typed reasoning substitutions nested under `chat_template_kwargs`.
+    ChatTemplateKwargs(OpenAiChatTemplateKwargs),
 }
 
 impl OpenAiReasoningFormat {
-    /// Whether this shape carries an explicit reasoning token budget. No
-    /// OpenAI-compatible shape does — effort is a string, never a token count.
+    /// Whether this shape carries an explicit reasoning token budget.
+    /// Only a `chat_template_kwargs` declaration naming a budget field does.
     pub const fn accepts_token_budget(self) -> bool {
-        false
+        matches!(
+            self,
+            Self::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+                token_budget: Some(_),
+                ..
+            })
+        )
     }
 
     /// Whether the endpoint declares a reasoning request shape at all.
     pub const fn is_declared(self) -> bool {
         !matches!(self, Self::Unsupported)
+    }
+
+    pub(crate) fn validate(self) -> Result<(), String> {
+        match self {
+            Self::ChatTemplateKwargs(kwargs) => kwargs.validate(),
+            _ => Ok(()),
+        }
     }
 }
 

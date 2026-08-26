@@ -451,6 +451,10 @@ struct ReasoningWire {
     thinking: Option<ThinkingToggle>,
     /// The top-level `reasoning_effort` string.
     effort: Option<&'static str>,
+    /// The top-level `enable_thinking` boolean.
+    enable_thinking: Option<bool>,
+    /// Typed substitutions nested under `chat_template_kwargs`.
+    chat_template_kwargs: Option<serde_json::Value>,
 }
 
 /// How `effort` is spelled inside a `reasoning_effort` field.
@@ -495,6 +499,8 @@ fn reasoning_wire(
         OpenAiReasoningFormat::ReasoningEffort => ReasoningWire {
             thinking: None,
             effort: Some(effort_wire_value(reasoning.effort)),
+            enable_thinking: None,
+            chat_template_kwargs: None,
         },
         // The toggle is what disables here, so `Off` sends it alone: an effort
         // string alongside `"disabled"` would be a second, contradictory
@@ -502,13 +508,49 @@ fn reasoning_wire(
         OpenAiReasoningFormat::ThinkingToggle => ReasoningWire {
             thinking: toggle,
             effort: enabled.then(|| effort_wire_value(reasoning.effort)),
+            enable_thinking: None,
+            chat_template_kwargs: None,
         },
         // The shape carries no effort field at all; the ladder collapses onto
         // the toggle.
         OpenAiReasoningFormat::ThinkingToggleOnly => ReasoningWire {
             thinking: toggle,
             effort: None,
+            enable_thinking: None,
+            chat_template_kwargs: None,
         },
+        OpenAiReasoningFormat::EnableThinking => ReasoningWire {
+            thinking: None,
+            effort: None,
+            enable_thinking: Some(enabled),
+            chat_template_kwargs: None,
+        },
+        OpenAiReasoningFormat::ChatTemplateKwargs(declaration) => {
+            let mut kwargs = serde_json::Map::new();
+            if let Some(name) = declaration.enable_thinking {
+                kwargs.insert(name.to_string(), serde_json::Value::Bool(enabled));
+            }
+            if let Some(name) = declaration.reasoning_effort
+                && (enabled || declaration.enable_thinking.is_none())
+            {
+                kwargs.insert(
+                    name.to_string(),
+                    serde_json::Value::String(effort_wire_value(reasoning.effort).into()),
+                );
+            }
+            if enabled
+                && let (Some(field), Some(tokens)) =
+                    (declaration.token_budget, reasoning.token_budget)
+            {
+                kwargs.insert(field.as_str().into(), serde_json::Value::from(tokens));
+            }
+            ReasoningWire {
+                thinking: None,
+                effort: None,
+                enable_thinking: None,
+                chat_template_kwargs: Some(serde_json::Value::Object(kwargs)),
+            }
+        }
     }
 }
 
@@ -760,6 +802,8 @@ fn build_request_body(
         prompt_cache_retention,
         thinking: reasoning.thinking,
         reasoning_effort: reasoning.effort,
+        enable_thinking: reasoning.enable_thinking,
+        chat_template_kwargs: reasoning.chat_template_kwargs,
         tool_choice: tool_choice_wire(options.tool_choice.as_ref()),
     }
 }
@@ -811,6 +855,10 @@ struct ChatRequest {
     thinking: Option<ThinkingToggle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enable_thinking: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chat_template_kwargs: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<serde_json::Value>,
 }

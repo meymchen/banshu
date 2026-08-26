@@ -16,9 +16,13 @@
 //! - An unsupported request never becomes HTTP traffic — the preflight refuses
 //!   it, and the mock server's journal proves it.
 
+use std::sync::Arc;
+
+use banshu_ai::api::openai_completions::OpenAiCompletions;
 use banshu_ai::{
-    AssistantContent, Context, ErrorKind, Model, OpenAiReasoningFormat, Provider,
-    ReasoningCapability, ReasoningEffort, ReasoningOptions, StreamOptions,
+    AssistantContent, CapabilitySupport, Context, ErrorKind, Model, OpenAiChatTemplateKwargs,
+    OpenAiCompat, OpenAiReasoningBudgetField, OpenAiReasoningFormat, Provider, ReasoningCapability,
+    ReasoningEffort, ReasoningOptions, StreamOptions,
 };
 use serde_json::Value;
 use wiremock::matchers::{method, path};
@@ -105,6 +109,26 @@ fn reasoning_model(provider: &Provider, server: &MockServer) -> Model {
     model.provider = provider.id().to_string();
     model.reasoning = ReasoningCapability::baseline();
     model
+}
+
+/// A custom OpenAI-compatible provider and model pointed at one local server.
+async fn custom_reasoning_target(
+    format: OpenAiReasoningFormat,
+    reasoning: ReasoningCapability,
+) -> (MockServer, Provider, Model) {
+    let server = mock_server().await;
+    let provider = Provider::builder("local", "Local", server.uri())
+        .adapter(Arc::new(OpenAiCompletions))
+        .openai_compat(OpenAiCompat {
+            reasoning_format: format,
+            ..OpenAiCompat::default()
+        })
+        .build()
+        .expect("valid provider");
+    let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
+    model.provider = "local".into();
+    model.reasoning = reasoning;
+    (server, provider, model)
 }
 
 async fn request_bodies(server: &MockServer) -> Vec<Value> {
@@ -315,6 +339,273 @@ async fn the_reasoning_effort_shape_disables_with_none_not_silence() {
     // level `off`, and the two are not interchangeable on the wire.
     let body = sent_body("openai", Some(ReasoningOptions::new(ReasoningEffort::Off))).await;
     carries_only(&body, &[("reasoning_effort", Value::String("none".into()))]);
+}
+
+// ---------------------------------------------------------------------------
+// Top-level `enable_thinking` — open-model runtimes
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_enable_thinking_shape_sends_exact_boolean_states() {
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::EnableThinking,
+        ReasoningCapability::baseline(),
+    )
+    .await;
+
+    for (effort, expected) in [
+        (ReasoningEffort::High, Value::Bool(true)),
+        (ReasoningEffort::Off, Value::Bool(false)),
+    ] {
+        let message = provider
+            .stream(
+                &model,
+                &Context::new().user("hi"),
+                &options(Some(ReasoningOptions::new(effort))),
+            )
+            .finish()
+            .await;
+        assert_eq!(message.error_kind, None, "{:?}", message.error_message);
+        let bodies = request_bodies(&server).await;
+        carries_only(
+            bodies.last().expect("request body"),
+            &[("enable_thinking", expected)],
+        );
+    }
+}
+
+#[tokio::test]
+async fn chat_template_kwargs_receive_only_typed_reasoning_values() {
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            enable_thinking: Some("enable_thinking"),
+            reasoning_effort: Some("reasoning_effort"),
+            token_budget: Some(OpenAiReasoningBudgetField::ThinkingTokenBudget),
+        }),
+        ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported),
+    )
+    .await;
+
+    let enabled = StreamOptions {
+        max_tokens: Some(8192),
+        ..options(Some(
+            ReasoningOptions::new(ReasoningEffort::High).with_token_budget(4096),
+        ))
+    };
+    let message = provider
+        .stream(&model, &Context::new().user("hi"), &enabled)
+        .finish()
+        .await;
+    assert_eq!(message.error_kind, None, "{:?}", message.error_message);
+    let bodies = request_bodies(&server).await;
+    carries_only(
+        bodies.last().expect("enabled request"),
+        &[(
+            "chat_template_kwargs",
+            serde_json::json!({
+                "enable_thinking": true,
+                "reasoning_effort": "high",
+                "thinking_token_budget": 4096,
+            }),
+        )],
+    );
+
+    let message = provider
+        .stream(
+            &model,
+            &Context::new().user("hi"),
+            &options(Some(ReasoningOptions::new(ReasoningEffort::Off))),
+        )
+        .finish()
+        .await;
+    assert_eq!(message.error_kind, None, "{:?}", message.error_message);
+    let bodies = request_bodies(&server).await;
+    carries_only(
+        bodies.last().expect("disabled request"),
+        &[(
+            "chat_template_kwargs",
+            serde_json::json!({ "enable_thinking": false }),
+        )],
+    );
+}
+
+#[tokio::test]
+async fn chat_template_budgets_that_conflict_with_disable_or_output_budget_fail_before_http() {
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            enable_thinking: Some("enable_thinking"),
+            reasoning_effort: None,
+            token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudget),
+        }),
+        ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported),
+    )
+    .await;
+
+    for reasoning in [
+        ReasoningOptions::new(ReasoningEffort::High).with_token_budget(4096),
+        ReasoningOptions::new(ReasoningEffort::Off).with_token_budget(1024),
+    ] {
+        let message = provider
+            .stream(
+                &model,
+                &Context::new().user("hi"),
+                &StreamOptions {
+                    max_tokens: Some(4096),
+                    ..options(Some(reasoning))
+                },
+            )
+            .finish()
+            .await;
+        assert_eq!(message.error_kind, Some(ErrorKind::InvalidRequest));
+    }
+
+    assert!(
+        request_bodies(&server).await.is_empty(),
+        "invalid budgets must fail before HTTP"
+    );
+}
+
+#[tokio::test]
+async fn an_optional_chat_template_budget_does_not_make_every_enabled_request_spend_one() {
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            enable_thinking: Some("enable_thinking"),
+            reasoning_effort: None,
+            token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudgetTokens),
+        }),
+        ReasoningCapability::baseline(),
+    )
+    .await;
+
+    let message = provider
+        .stream(
+            &model,
+            &Context::new().user("hi"),
+            &options(Some(ReasoningOptions::new(ReasoningEffort::High))),
+        )
+        .finish()
+        .await;
+    assert_eq!(message.error_kind, None, "{:?}", message.error_message);
+    carries_only(
+        &request_bodies(&server).await[0],
+        &[(
+            "chat_template_kwargs",
+            serde_json::json!({ "enable_thinking": true }),
+        )],
+    );
+}
+
+#[tokio::test]
+async fn every_declared_chat_template_budget_field_is_sent_verbatim() {
+    for (field, name) in [
+        (
+            OpenAiReasoningBudgetField::ThinkingTokenBudget,
+            "thinking_token_budget",
+        ),
+        (
+            OpenAiReasoningBudgetField::ThinkingBudget,
+            "thinking_budget",
+        ),
+        (
+            OpenAiReasoningBudgetField::ThinkingBudgetTokens,
+            "thinking_budget_tokens",
+        ),
+    ] {
+        let (server, provider, model) = custom_reasoning_target(
+            OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+                enable_thinking: Some("enabled"),
+                reasoning_effort: None,
+                token_budget: Some(field),
+            }),
+            ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported),
+        )
+        .await;
+
+        let message = provider
+            .stream(
+                &model,
+                &Context::new().user("hi"),
+                &StreamOptions {
+                    max_tokens: Some(4096),
+                    ..options(Some(
+                        ReasoningOptions::new(ReasoningEffort::High).with_token_budget(2048),
+                    ))
+                },
+            )
+            .finish()
+            .await;
+        assert_eq!(message.error_kind, None, "{:?}", message.error_message);
+        let mut expected = serde_json::json!({ "enabled": true });
+        expected[name] = serde_json::json!(2048);
+        carries_only(
+            &request_bodies(&server).await[0],
+            &[("chat_template_kwargs", expected)],
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_effort_only_chat_template_shape_uses_none_to_disable() {
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            reasoning_effort: Some("effort"),
+            ..OpenAiChatTemplateKwargs::default()
+        }),
+        ReasoningCapability::baseline(),
+    )
+    .await;
+
+    for (effort, expected) in [
+        (ReasoningEffort::High, "high"),
+        (ReasoningEffort::Off, "none"),
+    ] {
+        let message = provider
+            .stream(
+                &model,
+                &Context::new().user("hi"),
+                &options(Some(ReasoningOptions::new(effort))),
+            )
+            .finish()
+            .await;
+        assert_eq!(message.error_kind, None, "{:?}", message.error_message);
+        let bodies = request_bodies(&server).await;
+        carries_only(
+            bodies.last().expect("request body"),
+            &[(
+                "chat_template_kwargs",
+                serde_json::json!({ "effort": expected }),
+            )],
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_unattested_chat_template_budget_fails_before_http() {
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            enable_thinking: Some("enabled"),
+            reasoning_effort: None,
+            token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudget),
+        }),
+        ReasoningCapability::baseline(),
+    )
+    .await;
+
+    let message = provider
+        .stream(
+            &model,
+            &Context::new().user("hi"),
+            &StreamOptions {
+                max_tokens: Some(4096),
+                ..options(Some(
+                    ReasoningOptions::new(ReasoningEffort::High).with_token_budget(2048),
+                ))
+            },
+        )
+        .finish()
+        .await;
+    assert_eq!(message.error_kind, Some(ErrorKind::InvalidRequest));
+    assert!(request_bodies(&server).await.is_empty());
 }
 
 // ---------------------------------------------------------------------------

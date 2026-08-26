@@ -66,6 +66,22 @@ ladder `off`…`high` where the provider declares none; Probe models attest
 nothing.
 _Avoid_: reasoning flag, thinking support
 
+**Open-model Reasoning Declaration** (`OpenAiReasoningFormat::EnableThinking`,
+`OpenAiReasoningFormat::ChatTemplateKwargs`, `OpenAiChatTemplateKwargs`,
+`OpenAiReasoningBudgetField`, issue #93):
+The exact request-side reasoning controls an OpenAI-compatible open-model
+runtime attests. A top-level declaration maps enabled efforts to
+`enable_thinking: true` and `Off` to `false`. A chat-template declaration may
+name only keyword slots for the typed enabled state and effort, plus one of
+the closed budget keys `thinking_token_budget`, `thinking_budget`, or
+`thinking_budget_tokens`; the adapter owns the surrounding
+`chat_template_kwargs` object, so declarations cannot traverse into or replace
+`model`, messages, tools, or another adapter-owned field. Duplicate, empty, or
+non-disabling declarations fail provider construction. Explicit budgets remain
+subject to model attestation and must fit below the resolved Output Budget;
+every mismatch fails in-band before HTTP.
+_Avoid_: reasoning payload template, arbitrary request patch
+
 ### Core (established)
 
 **Provider**:

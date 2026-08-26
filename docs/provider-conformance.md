@@ -54,3 +54,30 @@ Every fixed promise above is exercised without live credentials:
 Tool calling and image input themselves are explicitly model dependent. Their
 catalog attestations are covered by `crates/ai/tests/model_capabilities.rs`;
 the matrix deliberately makes no provider-wide promise for either capability.
+
+## Custom OpenAI-compatible reasoning declarations
+
+Bundled-provider request bodies remain frozen by the matrix above. A custom
+OpenAI-compatible provider may additionally declare either of these wire
+formats:
+
+| Declaration | Enabled request | Disabled request | Optional values |
+| --- | --- | --- | --- |
+| `OpenAiReasoningFormat::EnableThinking` | top-level `enable_thinking: true` | top-level `enable_thinking: false` | none |
+| `OpenAiReasoningFormat::ChatTemplateKwargs(..)` | declared boolean and/or effort keyword inside `chat_template_kwargs` | declared boolean becomes `false`; an effort-only declaration sends `"none"` | an explicit, model-attested token budget |
+
+`OpenAiChatTemplateKwargs` accepts keyword names only for the typed enabled
+state and effort values. Budget names are the closed
+`OpenAiReasoningBudgetField` enum:
+
+- `thinking_token_budget`
+- `thinking_budget`
+- `thinking_budget_tokens`
+
+Empty declarations, duplicate keyword destinations, and declarations that
+cannot express an explicit disabled state fail `ProviderBuilder::build`.
+Unsupported efforts or budgets, a budget paired with `Off`, and a budget that
+does not fit below the resolved Output Budget fail in-band before HTTP. The
+complete local-server matrix is in
+`crates/ai/tests/openai_reasoning_requests.rs`; construction failures are in
+`crates/ai/tests/extension_seams.rs`.

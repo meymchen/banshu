@@ -67,9 +67,9 @@ pub use observer::{BeforeSendObservation, RequestObserver, ResponseObservation};
 pub use options::{CacheRetention, StreamOptions};
 pub use overflow::is_context_overflow;
 pub use provider::{
-    AnthropicCompat, AnthropicReasoningFormat, OpenAiCacheRetention, OpenAiCompat,
-    OpenAiOutputTokenField, OpenAiReasoningFormat, OpenAiSessionAffinity, OpenAiStreamTermination,
-    Provider, ProviderBuilder, ToolChoiceSupport,
+    AnthropicCompat, AnthropicReasoningFormat, OpenAiCacheRetention, OpenAiChatTemplateKwargs,
+    OpenAiCompat, OpenAiOutputTokenField, OpenAiReasoningBudgetField, OpenAiReasoningFormat,
+    OpenAiSessionAffinity, OpenAiStreamTermination, Provider, ProviderBuilder, ToolChoiceSupport,
 };
 pub use registry::Models;
 pub use stream::{AssistantMessageEvent, MessageStream};
