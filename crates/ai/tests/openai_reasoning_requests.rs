@@ -111,6 +111,26 @@ fn reasoning_model(provider: &Provider, server: &MockServer) -> Model {
     model
 }
 
+/// A custom OpenAI-compatible provider and model pointed at one local server.
+async fn custom_reasoning_target(
+    format: OpenAiReasoningFormat,
+    reasoning: ReasoningCapability,
+) -> (MockServer, Provider, Model) {
+    let server = mock_server().await;
+    let provider = Provider::builder("local", "Local", server.uri())
+        .adapter(Arc::new(OpenAiCompletions))
+        .openai_compat(OpenAiCompat {
+            reasoning_format: format,
+            ..OpenAiCompat::default()
+        })
+        .build()
+        .expect("valid provider");
+    let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
+    model.provider = "local".into();
+    model.reasoning = reasoning;
+    (server, provider, model)
+}
+
 async fn request_bodies(server: &MockServer) -> Vec<Value> {
     server
         .received_requests()
@@ -327,18 +347,11 @@ async fn the_reasoning_effort_shape_disables_with_none_not_silence() {
 
 #[tokio::test]
 async fn the_enable_thinking_shape_sends_exact_boolean_states() {
-    let server = mock_server().await;
-    let provider = Provider::builder("local", "Local", server.uri())
-        .adapter(Arc::new(OpenAiCompletions))
-        .openai_compat(OpenAiCompat {
-            reasoning_format: OpenAiReasoningFormat::EnableThinking,
-            ..OpenAiCompat::default()
-        })
-        .build()
-        .expect("valid provider");
-    let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
-    model.provider = "local".into();
-    model.reasoning = ReasoningCapability::baseline();
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::EnableThinking,
+        ReasoningCapability::baseline(),
+    )
+    .await;
 
     for (effort, expected) in [
         (ReasoningEffort::High, Value::Bool(true)),
@@ -363,23 +376,15 @@ async fn the_enable_thinking_shape_sends_exact_boolean_states() {
 
 #[tokio::test]
 async fn chat_template_kwargs_receive_only_typed_reasoning_values() {
-    let server = mock_server().await;
-    let provider = Provider::builder("local", "Local", server.uri())
-        .adapter(Arc::new(OpenAiCompletions))
-        .openai_compat(OpenAiCompat {
-            reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
-                enable_thinking: Some("enable_thinking"),
-                reasoning_effort: Some("reasoning_effort"),
-                token_budget: Some(OpenAiReasoningBudgetField::ThinkingTokenBudget),
-            }),
-            ..OpenAiCompat::default()
-        })
-        .build()
-        .expect("valid provider");
-    let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
-    model.provider = "local".into();
-    model.reasoning =
-        ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported);
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            enable_thinking: Some("enable_thinking"),
+            reasoning_effort: Some("reasoning_effort"),
+            token_budget: Some(OpenAiReasoningBudgetField::ThinkingTokenBudget),
+        }),
+        ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported),
+    )
+    .await;
 
     let enabled = StreamOptions {
         max_tokens: Some(8192),
@@ -426,23 +431,15 @@ async fn chat_template_kwargs_receive_only_typed_reasoning_values() {
 
 #[tokio::test]
 async fn chat_template_budgets_that_conflict_with_disable_or_output_budget_fail_before_http() {
-    let server = mock_server().await;
-    let provider = Provider::builder("local", "Local", server.uri())
-        .adapter(Arc::new(OpenAiCompletions))
-        .openai_compat(OpenAiCompat {
-            reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
-                enable_thinking: Some("enable_thinking"),
-                reasoning_effort: None,
-                token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudget),
-            }),
-            ..OpenAiCompat::default()
-        })
-        .build()
-        .expect("valid provider");
-    let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
-    model.provider = "local".into();
-    model.reasoning =
-        ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported);
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            enable_thinking: Some("enable_thinking"),
+            reasoning_effort: None,
+            token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudget),
+        }),
+        ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported),
+    )
+    .await;
 
     for reasoning in [
         ReasoningOptions::new(ReasoningEffort::High).with_token_budget(4096),
@@ -470,22 +467,15 @@ async fn chat_template_budgets_that_conflict_with_disable_or_output_budget_fail_
 
 #[tokio::test]
 async fn an_optional_chat_template_budget_does_not_make_every_enabled_request_spend_one() {
-    let server = mock_server().await;
-    let provider = Provider::builder("local", "Local", server.uri())
-        .adapter(Arc::new(OpenAiCompletions))
-        .openai_compat(OpenAiCompat {
-            reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
-                enable_thinking: Some("enable_thinking"),
-                reasoning_effort: None,
-                token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudgetTokens),
-            }),
-            ..OpenAiCompat::default()
-        })
-        .build()
-        .expect("valid provider");
-    let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
-    model.provider = "local".into();
-    model.reasoning = ReasoningCapability::baseline();
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            enable_thinking: Some("enable_thinking"),
+            reasoning_effort: None,
+            token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudgetTokens),
+        }),
+        ReasoningCapability::baseline(),
+    )
+    .await;
 
     let message = provider
         .stream(
@@ -521,25 +511,15 @@ async fn every_declared_chat_template_budget_field_is_sent_verbatim() {
             "thinking_budget_tokens",
         ),
     ] {
-        let server = mock_server().await;
-        let provider = Provider::builder("local", "Local", server.uri())
-            .adapter(Arc::new(OpenAiCompletions))
-            .openai_compat(OpenAiCompat {
-                reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(
-                    OpenAiChatTemplateKwargs {
-                        enable_thinking: Some("enabled"),
-                        reasoning_effort: None,
-                        token_budget: Some(field),
-                    },
-                ),
-                ..OpenAiCompat::default()
-            })
-            .build()
-            .expect("valid provider");
-        let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
-        model.provider = "local".into();
-        model.reasoning =
-            ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported);
+        let (server, provider, model) = custom_reasoning_target(
+            OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+                enable_thinking: Some("enabled"),
+                reasoning_effort: None,
+                token_budget: Some(field),
+            }),
+            ReasoningCapability::baseline().with_token_budget(CapabilitySupport::Supported),
+        )
+        .await;
 
         let message = provider
             .stream(
@@ -555,37 +535,25 @@ async fn every_declared_chat_template_budget_field_is_sent_verbatim() {
             .finish()
             .await;
         assert_eq!(message.error_kind, None, "{:?}", message.error_message);
-        let body = &request_bodies(&server).await[0];
-        assert_eq!(body["chat_template_kwargs"]["enabled"], true);
-        assert_eq!(body["chat_template_kwargs"][name], 2048);
-        assert_eq!(
-            body["chat_template_kwargs"]
-                .as_object()
-                .expect("kwargs object")
-                .len(),
-            2,
-            "only the declared enabled state and `{name}` belong in {body}"
+        let mut expected = serde_json::json!({ "enabled": true });
+        expected[name] = serde_json::json!(2048);
+        carries_only(
+            &request_bodies(&server).await[0],
+            &[("chat_template_kwargs", expected)],
         );
     }
 }
 
 #[tokio::test]
 async fn an_effort_only_chat_template_shape_uses_none_to_disable() {
-    let server = mock_server().await;
-    let provider = Provider::builder("local", "Local", server.uri())
-        .adapter(Arc::new(OpenAiCompletions))
-        .openai_compat(OpenAiCompat {
-            reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
-                reasoning_effort: Some("effort"),
-                ..OpenAiChatTemplateKwargs::default()
-            }),
-            ..OpenAiCompat::default()
-        })
-        .build()
-        .expect("valid provider");
-    let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
-    model.provider = "local".into();
-    model.reasoning = ReasoningCapability::baseline();
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            reasoning_effort: Some("effort"),
+            ..OpenAiChatTemplateKwargs::default()
+        }),
+        ReasoningCapability::baseline(),
+    )
+    .await;
 
     for (effort, expected) in [
         (ReasoningEffort::High, "high"),
@@ -613,22 +581,15 @@ async fn an_effort_only_chat_template_shape_uses_none_to_disable() {
 
 #[tokio::test]
 async fn an_unattested_chat_template_budget_fails_before_http() {
-    let server = mock_server().await;
-    let provider = Provider::builder("local", "Local", server.uri())
-        .adapter(Arc::new(OpenAiCompletions))
-        .openai_compat(OpenAiCompat {
-            reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
-                enable_thinking: Some("enabled"),
-                reasoning_effort: None,
-                token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudget),
-            }),
-            ..OpenAiCompat::default()
-        })
-        .build()
-        .expect("valid provider");
-    let mut model = Model::openai_completions("reasoner").with_base_url(server.uri());
-    model.provider = "local".into();
-    model.reasoning = ReasoningCapability::baseline();
+    let (server, provider, model) = custom_reasoning_target(
+        OpenAiReasoningFormat::ChatTemplateKwargs(OpenAiChatTemplateKwargs {
+            enable_thinking: Some("enabled"),
+            reasoning_effort: None,
+            token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudget),
+        }),
+        ReasoningCapability::baseline(),
+    )
+    .await;
 
     let message = provider
         .stream(
