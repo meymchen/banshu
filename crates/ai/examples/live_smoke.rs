@@ -12,7 +12,7 @@ use banshu_ai::{
 use futures_util::StreamExt;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const BASIC_MAX_TOKENS: u32 = 64;
+const BASIC_MAX_TOKENS: u32 = 256;
 const EXTENDED_MAX_TOKENS: u32 = 1_024;
 const TOOL_MAX_TOKENS: u32 = 512;
 const TOOL_RESULT_MAX_TOKENS: u32 = 512;
