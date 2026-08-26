@@ -20,6 +20,7 @@ mod normalize;
 mod output_budget;
 mod protocol_event;
 mod reasoning;
+mod temperature;
 mod tool_choice;
 
 use std::sync::Arc;
@@ -257,12 +258,20 @@ pub(crate) fn drive(
             }
         };
 
-        // The reasoning, tool-choice, and cache-routing preflights read only
-        // the options, the model's attested capability, and the provider's
-        // declared request shape, so they run first: a request nothing can
-        // honour fails before any work is done on its behalf.
+        // The reasoning, temperature, tool-choice, and cache-routing
+        // preflights read only the options, the model's attested capability,
+        // and the provider's declared request shape, so they run first: a
+        // request nothing can honour fails before any work is done on its
+        // behalf. Temperature runs after reasoning so an "enabled reasoning
+        // request" it sees is always one that will actually be sent.
         if let Err(detail) =
             reasoning::validate(&model, &options, openai_compat, anthropic_compat)
+        {
+            yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
+            return;
+        }
+        if let Err(detail) =
+            temperature::validate(&model, &options, openai_compat, anthropic_compat)
         {
             yield assembler.fail(ErrorKind::InvalidRequest, detail, Vec::new());
             return;

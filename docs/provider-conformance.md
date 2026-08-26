@@ -15,6 +15,12 @@ reported by the provider.
 | Kimi For Coding | Anthropic Messages | OAuth device flow; `KIMI_API_KEY` override | on/off toggle | model dependent; no explicit choice attested | model dependent | Anthropic cache breakpoints (system, messages, tools; 1h TTL attested) and usage |
 | MiniMax (Global/CN) | Anthropic Messages | OAuth portal flow; `MINIMAX_API_KEY` override | adaptive thinking | model dependent; all choices | model dependent | Anthropic cache breakpoints (system, messages, tools; 1h TTL attested) and usage |
 
+Sampling on the Anthropic-compatible rows: MiniMax declares `temperature`
+alongside every reasoning shape it declares (its reference marks it fully
+supported and names no thinking restriction); Kimi declares none, so an
+explicit temperature is refused before dispatch. OpenAI-compatible sampling
+parameters are sent as given today and are not part of this matrix yet.
+
 ## Automated evidence
 
 Every fixed promise above is exercised without live credentials:
@@ -45,6 +51,11 @@ Every fixed promise above is exercised without live credentials:
   provider keeps the undeclared defaults):
   `crates/ai/tests/provider_conformance.rs` and
   `crates/ai/tests/anthropic_prompt_caching.rs`.
+- Anthropic-compatible temperature declarations (MiniMax attests temperature
+  alongside every reasoning shape it declares; every other provider keeps the
+  undeclared default, which refuses an explicit temperature before dispatch):
+  `crates/ai/tests/provider_conformance.rs` and
+  `crates/ai/tests/anthropic_temperature.rs`.
 - OpenAI-compatible request envelopes (streamed-usage request and the
   output-token field carrying the Output Budget — every bundled provider
   keeps the default: usage requested, `max_tokens`):

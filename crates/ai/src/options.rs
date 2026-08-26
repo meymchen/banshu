@@ -73,6 +73,16 @@ pub enum CacheRetention {
 #[derive(Clone, Default)]
 pub struct StreamOptions {
     /// Sampling temperature.
+    ///
+    /// `Some(..)` is an explicit request. On the Anthropic Messages protocol
+    /// it is checked before dispatch against the support the provider
+    /// declares
+    /// ([`AnthropicCompat::temperature`](crate::AnthropicCompat::temperature)):
+    /// a provider that attests no temperature support — or none alongside an
+    /// enabled reasoning request — refuses it in-band with
+    /// [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest) before
+    /// any HTTP request. It is never silently dropped to make a request
+    /// succeed; an omitted temperature leaves the request shape untouched.
     pub temperature: Option<f32>,
     /// Maximum output tokens.
     ///

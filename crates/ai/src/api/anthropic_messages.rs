@@ -642,6 +642,19 @@ fn build_request_body(
 
     let max_tokens = final_max_tokens(model, options);
 
+    // The [temperature preflight](super::temperature) has already refused an
+    // explicit temperature the declaration forbids, so one reaching here is
+    // always sent exactly as given — never dropped to make the request pass.
+    debug_assert!(
+        options
+            .temperature
+            .is_none_or(|_| super::temperature::permits(
+                compat.temperature,
+                options.reasoning.as_ref(),
+            )),
+        "the temperature preflight should have refused this request",
+    );
+
     // System prompt goes out as a text block so it can carry a breakpoint.
     let system = context.system_prompt.as_ref().map(|text| {
         let mut block = serde_json::json!({ "type": "text", "text": text });
