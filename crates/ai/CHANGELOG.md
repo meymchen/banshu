@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(ai)* [**breaking**] re-freeze the planned 1.0 stream and open-model
+  compatibility contract, with complete bundled-provider declarations and
+  compile-checked custom-provider migration guidance ([#97](https://github.com/meymchen/banshu/issues/97))
+
+### Changed
+
+- **Breaking:** `AssistantMessageEvent::Start` now carries the pending
+  `AssistantMessage`; custom compatibility literals must use the new
+  cache-routing, request-envelope, termination, tool-history, reasoning,
+  sampling, and Anthropic temperature declarations. See
+  `docs/migration-1.0.md`.
+
 ## [0.9.0](https://github.com/meymchen/banshu/compare/v0.8.0...v0.9.0) - 2026-08-25
 
 ### Added

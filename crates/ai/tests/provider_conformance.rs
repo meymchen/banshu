@@ -7,13 +7,55 @@
 use std::sync::{Arc, Mutex};
 
 use banshu_ai::{
-    AnthropicCacheRetention, AnthropicReasoningFormat, AnthropicTemperature, ApiKind,
-    InMemoryCredentialStore, MiniMaxRegion, OpenAiCacheRetention, OpenAiOutputTokenField,
-    OpenAiReasoningFormat, OpenAiSessionAffinity, OpenAiStreamTermination, Provider,
-    ReasoningEffort, ToolChoice, ToolChoiceSupport,
+    AnthropicCacheRetention, AnthropicCompat, AnthropicReasoningFormat, AnthropicTemperature,
+    ApiKind, InMemoryCredentialStore, MiniMaxRegion, OpenAiCacheRetention, OpenAiCompat,
+    OpenAiOutputTokenField, OpenAiReasoningFormat, OpenAiSessionAffinity, OpenAiStreamTermination,
+    Provider, ReasoningEffort, ToolChoice, ToolChoiceSupport,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// The complete undeclared OpenAI compatibility value. This is deliberately
+/// not `OpenAiCompat::default()`: a new field must break this fixture until the
+/// frozen matrix makes a decision about it.
+const OPENAI_DEFAULT: OpenAiCompat = OpenAiCompat {
+    session_affinity: OpenAiSessionAffinity::None,
+    cache_retention: OpenAiCacheRetention::Short,
+    requires_reasoning_content_on_assistant_messages: false,
+    reasoning_format: OpenAiReasoningFormat::Unsupported,
+    tool_choice: ToolChoiceSupport::NONE,
+    strict_tool_schemas: false,
+    reasoning_efforts: None,
+    streamed_usage: true,
+    output_token_field: OpenAiOutputTokenField::MaxTokens,
+    stream_termination: OpenAiStreamTermination::Strict,
+    tool_result_names: false,
+    empty_assistant_separator: false,
+};
+
+/// The complete undeclared Anthropic compatibility value, explicit for the
+/// same compile-time freeze as [`OPENAI_DEFAULT`].
+const ANTHROPIC_DEFAULT: AnthropicCompat = AnthropicCompat {
+    allow_empty_signature: false,
+    send_session_affinity_headers: false,
+    cache_retention: AnthropicCacheRetention::Short,
+    tool_cache_control: false,
+    reasoning_format: AnthropicReasoningFormat::Unsupported,
+    temperature: AnthropicTemperature::Unsupported,
+    tool_choice: ToolChoiceSupport::NONE,
+    strict_tool_schemas: false,
+    reasoning_efforts: None,
+};
+
+/// Both MiniMax regions expose the same Anthropic wire contract.
+const MINIMAX_ANTHROPIC: AnthropicCompat = AnthropicCompat {
+    cache_retention: AnthropicCacheRetention::Long,
+    tool_cache_control: true,
+    reasoning_format: AnthropicReasoningFormat::ThinkingAdaptive,
+    temperature: AnthropicTemperature::WithReasoning,
+    tool_choice: ToolChoiceSupport::ALL,
+    ..ANTHROPIC_DEFAULT
+};
 
 struct ProviderExpectation {
     build: fn() -> Provider,
@@ -23,14 +65,8 @@ struct ProviderExpectation {
     api: ApiKind,
     api_key_env: &'static str,
     oauth: bool,
-    openai_reasoning: OpenAiReasoningFormat,
-    anthropic_reasoning: AnthropicReasoningFormat,
-    anthropic_cache_retention: AnthropicCacheRetention,
-    anthropic_tool_cache: bool,
-    anthropic_temperature: AnthropicTemperature,
-    efforts: Option<&'static [ReasoningEffort]>,
-    tool_choice: ToolChoiceSupport,
-    strict_tools: bool,
+    openai: OpenAiCompat,
+    anthropic: AnthropicCompat,
 }
 
 fn providers() -> [ProviderExpectation; 7] {
@@ -43,24 +79,23 @@ fn providers() -> [ProviderExpectation; 7] {
             api: ApiKind::OpenAiCompletions,
             api_key_env: "DEEPSEEK_API_KEY",
             oauth: false,
-            openai_reasoning: OpenAiReasoningFormat::ThinkingToggle,
-            anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
-            anthropic_cache_retention: AnthropicCacheRetention::Short,
-            anthropic_tool_cache: false,
-            anthropic_temperature: AnthropicTemperature::Unsupported,
-            efforts: Some(&[
-                ReasoningEffort::Off,
-                ReasoningEffort::Low,
-                ReasoningEffort::High,
-                ReasoningEffort::Max,
-            ]),
-            tool_choice: ToolChoiceSupport {
-                auto: true,
-                none: true,
-                required: false,
-                named: false,
+            openai: OpenAiCompat {
+                requires_reasoning_content_on_assistant_messages: true,
+                reasoning_format: OpenAiReasoningFormat::ThinkingToggle,
+                reasoning_efforts: Some(&[
+                    ReasoningEffort::Off,
+                    ReasoningEffort::Low,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Max,
+                ]),
+                tool_choice: ToolChoiceSupport {
+                    auto: true,
+                    none: true,
+                    ..ToolChoiceSupport::NONE
+                },
+                ..OPENAI_DEFAULT
             },
-            strict_tools: false,
+            anthropic: ANTHROPIC_DEFAULT,
         },
         ProviderExpectation {
             build: Provider::zai,
@@ -70,17 +105,15 @@ fn providers() -> [ProviderExpectation; 7] {
             api: ApiKind::OpenAiCompletions,
             api_key_env: "ZAI_API_KEY",
             oauth: false,
-            openai_reasoning: OpenAiReasoningFormat::ThinkingToggleOnly,
-            anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
-            anthropic_cache_retention: AnthropicCacheRetention::Short,
-            anthropic_tool_cache: false,
-            anthropic_temperature: AnthropicTemperature::Unsupported,
-            efforts: None,
-            tool_choice: ToolChoiceSupport {
-                auto: true,
-                ..ToolChoiceSupport::NONE
+            openai: OpenAiCompat {
+                reasoning_format: OpenAiReasoningFormat::ThinkingToggleOnly,
+                tool_choice: ToolChoiceSupport {
+                    auto: true,
+                    ..ToolChoiceSupport::NONE
+                },
+                ..OPENAI_DEFAULT
             },
-            strict_tools: false,
+            anthropic: ANTHROPIC_DEFAULT,
         },
         ProviderExpectation {
             build: Provider::moonshot,
@@ -90,14 +123,13 @@ fn providers() -> [ProviderExpectation; 7] {
             api: ApiKind::OpenAiCompletions,
             api_key_env: "MOONSHOT_API_KEY",
             oauth: false,
-            openai_reasoning: OpenAiReasoningFormat::Unsupported,
-            anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
-            anthropic_cache_retention: AnthropicCacheRetention::Short,
-            anthropic_tool_cache: false,
-            anthropic_temperature: AnthropicTemperature::Unsupported,
-            efforts: Some(&[]),
-            tool_choice: ToolChoiceSupport::ALL,
-            strict_tools: true,
+            openai: OpenAiCompat {
+                reasoning_efforts: Some(&[]),
+                tool_choice: ToolChoiceSupport::ALL,
+                strict_tool_schemas: true,
+                ..OPENAI_DEFAULT
+            },
+            anthropic: ANTHROPIC_DEFAULT,
         },
         ProviderExpectation {
             build: Provider::xiaomi,
@@ -107,17 +139,16 @@ fn providers() -> [ProviderExpectation; 7] {
             api: ApiKind::OpenAiCompletions,
             api_key_env: "XIAOMI_API_KEY",
             oauth: false,
-            openai_reasoning: OpenAiReasoningFormat::ThinkingToggleOnly,
-            anthropic_reasoning: AnthropicReasoningFormat::Unsupported,
-            anthropic_cache_retention: AnthropicCacheRetention::Short,
-            anthropic_tool_cache: false,
-            anthropic_temperature: AnthropicTemperature::Unsupported,
-            efforts: None,
-            tool_choice: ToolChoiceSupport {
-                auto: true,
-                ..ToolChoiceSupport::NONE
+            openai: OpenAiCompat {
+                reasoning_format: OpenAiReasoningFormat::ThinkingToggleOnly,
+                tool_choice: ToolChoiceSupport {
+                    auto: true,
+                    ..ToolChoiceSupport::NONE
+                },
+                strict_tool_schemas: true,
+                ..OPENAI_DEFAULT
             },
-            strict_tools: true,
+            anthropic: ANTHROPIC_DEFAULT,
         },
         ProviderExpectation {
             build: || Provider::kimi(Arc::new(InMemoryCredentialStore::new())),
@@ -127,14 +158,13 @@ fn providers() -> [ProviderExpectation; 7] {
             api: ApiKind::AnthropicMessages,
             api_key_env: "KIMI_API_KEY",
             oauth: true,
-            openai_reasoning: OpenAiReasoningFormat::Unsupported,
-            anthropic_reasoning: AnthropicReasoningFormat::ThinkingToggle,
-            anthropic_cache_retention: AnthropicCacheRetention::Long,
-            anthropic_tool_cache: true,
-            anthropic_temperature: AnthropicTemperature::Unsupported,
-            efforts: None,
-            tool_choice: ToolChoiceSupport::NONE,
-            strict_tools: false,
+            openai: OPENAI_DEFAULT,
+            anthropic: AnthropicCompat {
+                cache_retention: AnthropicCacheRetention::Long,
+                tool_cache_control: true,
+                reasoning_format: AnthropicReasoningFormat::ThinkingToggle,
+                ..ANTHROPIC_DEFAULT
+            },
         },
         ProviderExpectation {
             build: || {
@@ -149,14 +179,8 @@ fn providers() -> [ProviderExpectation; 7] {
             api: ApiKind::AnthropicMessages,
             api_key_env: "MINIMAX_API_KEY",
             oauth: true,
-            openai_reasoning: OpenAiReasoningFormat::Unsupported,
-            anthropic_reasoning: AnthropicReasoningFormat::ThinkingAdaptive,
-            anthropic_cache_retention: AnthropicCacheRetention::Long,
-            anthropic_tool_cache: true,
-            anthropic_temperature: AnthropicTemperature::WithReasoning,
-            efforts: None,
-            tool_choice: ToolChoiceSupport::ALL,
-            strict_tools: false,
+            openai: OPENAI_DEFAULT,
+            anthropic: MINIMAX_ANTHROPIC,
         },
         ProviderExpectation {
             build: || {
@@ -168,14 +192,8 @@ fn providers() -> [ProviderExpectation; 7] {
             api: ApiKind::AnthropicMessages,
             api_key_env: "MINIMAX_API_KEY",
             oauth: true,
-            openai_reasoning: OpenAiReasoningFormat::Unsupported,
-            anthropic_reasoning: AnthropicReasoningFormat::ThinkingAdaptive,
-            anthropic_cache_retention: AnthropicCacheRetention::Long,
-            anthropic_tool_cache: true,
-            anthropic_temperature: AnthropicTemperature::WithReasoning,
-            efforts: None,
-            tool_choice: ToolChoiceSupport::ALL,
-            strict_tools: false,
+            openai: OPENAI_DEFAULT,
+            anthropic: MINIMAX_ANTHROPIC,
         },
     ]
 }
@@ -191,59 +209,10 @@ fn bundled_providers_match_the_frozen_matrix() {
         assert_eq!(provider.name(), expected.name);
         assert_eq!(provider.base_url(), expected.base_url);
         assert_eq!(provider.api_kind(), expected.api);
-        // No provider in the matrix declares cache routing: no session-affinity
-        // shape, and no long-retention attestation.
+        assert_eq!(openai, expected.openai, "{}: OpenAI compat", expected.id);
         assert_eq!(
-            openai.session_affinity,
-            OpenAiSessionAffinity::None,
-            "{}: session affinity",
-            expected.id,
-        );
-        assert_eq!(
-            openai.cache_retention,
-            OpenAiCacheRetention::Short,
-            "{}: cache retention",
-            expected.id,
-        );
-        // Every bundled provider keeps the default request envelope: streamed
-        // usage is requested and `max_tokens` carries the Output Budget.
-        assert!(openai.streamed_usage, "{}: streamed usage", expected.id);
-        assert_eq!(
-            openai.output_token_field,
-            OpenAiOutputTokenField::MaxTokens,
-            "{}: output token field",
-            expected.id,
-        );
-        // No bundled provider attests clean-EOF completion: a bare EOF stays
-        // a dropped connection everywhere.
-        assert_eq!(
-            openai.stream_termination,
-            OpenAiStreamTermination::Strict,
-            "{}: stream termination",
-            expected.id,
-        );
-        assert_eq!(openai.reasoning_format, expected.openai_reasoning);
-        assert_eq!(anthropic.reasoning_format, expected.anthropic_reasoning);
-        // Anthropic cache declarations: the bundled Anthropic-compatible
-        // providers (Kimi, MiniMax) attest the one-hour TTL and
-        // tool-definition breakpoints; every other provider keeps the
-        // undeclared defaults.
-        assert_eq!(
-            anthropic.cache_retention, expected.anthropic_cache_retention,
-            "{}: anthropic cache retention",
-            expected.id,
-        );
-        assert_eq!(
-            anthropic.tool_cache_control, expected.anthropic_tool_cache,
-            "{}: anthropic tool cache control",
-            expected.id,
-        );
-        // Anthropic temperature declarations: MiniMax attests temperature
-        // alongside every reasoning shape it declares; every other provider
-        // keeps the undeclared default, which refuses an explicit one.
-        assert_eq!(
-            anthropic.temperature, expected.anthropic_temperature,
-            "{}: anthropic temperature",
+            anthropic, expected.anthropic,
+            "{}: Anthropic compat",
             expected.id,
         );
         let (actual_efforts, actual_tool_choice, actual_strict) = match expected.api {
@@ -259,13 +228,26 @@ fn bundled_providers_match_the_frozen_matrix() {
             ),
             _ => unreachable!("all current protocols are covered"),
         };
-        assert_eq!(actual_efforts, expected.efforts);
-        assert_eq!(actual_tool_choice, expected.tool_choice);
+        let (expected_efforts, expected_tool_choice, expected_strict) = match expected.api {
+            ApiKind::OpenAiCompletions => (
+                expected.openai.reasoning_efforts,
+                expected.openai.tool_choice,
+                expected.openai.strict_tool_schemas,
+            ),
+            ApiKind::AnthropicMessages => (
+                expected.anthropic.reasoning_efforts,
+                expected.anthropic.tool_choice,
+                expected.anthropic.strict_tool_schemas,
+            ),
+            _ => unreachable!("all current protocols are covered"),
+        };
+        assert_eq!(actual_efforts, expected_efforts);
+        assert_eq!(actual_tool_choice, expected_tool_choice);
         assert_eq!(
             actual_tool_choice.supports(&ToolChoice::Named("tool".into())),
-            expected.tool_choice.named,
+            expected_tool_choice.named,
         );
-        assert_eq!(actual_strict, expected.strict_tools);
+        assert_eq!(actual_strict, expected_strict);
         assert_eq!(provider.oauth_session().is_some(), expected.oauth);
     }
 }

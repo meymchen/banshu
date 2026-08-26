@@ -7,8 +7,12 @@ providers over the OpenAI Chat Completions and Anthropic Messages protocols.
 
 ```toml
 [dependencies]
-banshu-ai = "0.8"
+banshu-ai = "0.9"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# Needed only when constructing an application-owned HTTP client or JSON
+# sampling values, as in the custom-provider example below.
+reqwest = "0.12"
+serde_json = "1"
 ```
 
 ## Quick start
@@ -52,31 +56,65 @@ auth and feature contract for each bundled provider.
 ## Custom providers
 
 Use the validated builder when a service needs explicit models, authentication,
-headers, endpoint quirks, or more than one protocol adapter:
+an application-owned HTTP client, endpoint compatibility declarations, or more
+than one protocol adapter. This setup also shows typed reasoning and unmodelled
+OpenAI-compatible sampling controls:
 
 ```rust
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use banshu_ai::{Auth, Model, Provider};
 use banshu_ai::api::openai_completions::OpenAiCompletions;
+use banshu_ai::{
+    Auth, Model, OpenAiChatTemplateKwargs, OpenAiCompat,
+    OpenAiReasoningBudgetField, OpenAiReasoningFormat, Provider,
+    ReasoningEffort, ReasoningOptions, StreamOptions,
+};
 
 let mut model = Model::openai_completions("acme-chat")
     .with_base_url("https://llm.example/v1");
 model.provider = "acme".into();
 
+let http = reqwest::Client::builder().build()?;
 let provider = Provider::builder("acme", "Acme", "https://llm.example/v1")
     .auth(Auth::api_key_env(["ACME_API_KEY"]))
     .adapter(Arc::new(OpenAiCompletions))
+    .http_client(http)
+    .openai_compat(OpenAiCompat {
+        reasoning_format: OpenAiReasoningFormat::ChatTemplateKwargs(
+            OpenAiChatTemplateKwargs {
+                enable_thinking: Some("enable_thinking"),
+                reasoning_effort: Some("reasoning_effort"),
+                token_budget: Some(OpenAiReasoningBudgetField::ThinkingBudget),
+            },
+        ),
+        ..OpenAiCompat::default()
+    })
     .model(model)
     .build()?;
 
+let options = StreamOptions {
+    reasoning: Some(ReasoningOptions::new(ReasoningEffort::High)
+        .with_token_budget(2_048)),
+    sampling: BTreeMap::from([
+        ("top_p".into(), serde_json::json!(0.9)),
+        ("min_p".into(), serde_json::json!(0.05)),
+    ]),
+    ..StreamOptions::default()
+};
+
 assert_eq!(provider.id(), "acme");
-# Ok::<(), banshu_ai::Error>(())
+assert_eq!(options.sampling.len(), 2);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 For a simple single-protocol endpoint,
 `Provider::openai_compatible(...)` and `Provider::anthropic_compatible(...)`
 are concise alternatives. Use `Auth::keyless()` for a local unauthenticated
 server or `Auth::custom(...)` for an application-owned resolver.
+
+Applications upgrading from the earlier planned 1.0 surface should follow the
+[1.0 migration guide](docs/migration-1.0.md) for the new stream start event and
+compatibility declarations.
 
 ## OAuth
 
