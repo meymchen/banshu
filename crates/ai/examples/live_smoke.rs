@@ -299,7 +299,30 @@ async fn run_oauth_provider(provider_id: ProviderId, args: &Args) -> Result<(), 
     let provider = models
         .provider(provider_id.name())
         .ok_or_else(|| format!("provider `{provider_id}` disappeared after login"))?;
-    run_configured_provider(provider_id, provider, args).await
+    run_configured_provider(provider_id, provider, args).await?;
+    logout_oauth_provider(provider_id, &models).await
+}
+
+async fn logout_oauth_provider(provider_id: ProviderId, models: &Models) -> Result<(), String> {
+    let session = models
+        .provider(provider_id.name())
+        .and_then(Provider::oauth_session)
+        .ok_or_else(|| format!("provider `{provider_id}` has no OAuth session"))?;
+
+    eprintln!("LOGOUT {provider_id}: deleting stored OAuth credential");
+    models
+        .logout(provider_id.name())
+        .await
+        .map_err(|error| format!("OAuth logout failed: {error}"))?;
+    if session
+        .check_auth()
+        .await
+        .map_err(|error| format!("OAuth post-logout auth check failed: {error}"))?
+    {
+        return Err("OAuth logout completed but the stored credential is still available".into());
+    }
+    eprintln!("PASS {provider_id}/oauth-logout: stored credential was deleted");
+    Ok(())
 }
 
 async fn run_configured_provider(
@@ -626,4 +649,37 @@ Environment:\n  \
   DEEPSEEK_API_KEY, KIMI_API_KEY, MINIMAX_API_KEY\n  \
   BANSHU_AI_DEEPSEEK_MODEL, BANSHU_AI_KIMI_MODEL, BANSHU_AI_MINIMAX_MODEL"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use banshu_ai::{Credential, CredentialStore, OAuthCredential};
+
+    #[tokio::test]
+    async fn oauth_smoke_logout_clears_the_authenticated_session() {
+        let store = Arc::new(InMemoryCredentialStore::new());
+        store
+            .modify(
+                "kimi",
+                Box::new(|_| {
+                    Ok(Some(Credential::OAuth(OAuthCredential::new(
+                        "access-live",
+                        Some("refresh-live".into()),
+                        None,
+                    ))))
+                }),
+            )
+            .await
+            .unwrap();
+        let models = Models::new().with_provider(Provider::kimi(store));
+        let session = models.provider("kimi").unwrap().oauth_session().unwrap();
+        assert!(session.check_auth().await.unwrap());
+
+        logout_oauth_provider(ProviderId::Kimi, &models)
+            .await
+            .unwrap();
+
+        assert!(!session.check_auth().await.unwrap());
+    }
 }

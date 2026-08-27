@@ -81,8 +81,9 @@ scripts/smoke-ai.sh --provider kimi --oauth
 
 The command prints the verification URL and user code, waits for browser
 authorization, checks that the in-memory OAuth credential is available, and
-uses that credential for the live inference request. The credential is kept
-only for this process and is discarded when the smoke test exits.
+uses that credential for the live inference request. After the live checks
+pass, it logs out and verifies that the OAuth credential is no longer stored.
+The credential exists only within the smoke-test process.
 
 Use `--verbose` to print the request observer's redacted payload, URL, headers,
 and response metadata. Each live request has a 30-second timeout, zero retries,
