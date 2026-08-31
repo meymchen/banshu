@@ -52,6 +52,33 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  sonarqube:
+    name: SonarQube
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate coverage report
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --all-features --lcov \
+            --output-path coverage/lcov.info
+      - name: Analyze with SonarQube
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   msrv:
     name: MSRV (1.98.0)
     runs-on: ubuntu-latest
