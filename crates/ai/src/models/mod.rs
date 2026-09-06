@@ -7,7 +7,7 @@ pub(crate) mod dev;
 
 use serde::Deserialize;
 
-use crate::models_dev::{modality_from_str, reasoning_capability};
+use crate::models_dev::{modality_from_str, model_reasoning_format, reasoning_from_options};
 use crate::provider::DeclaredReasoning;
 use crate::types::{ApiKind, CapabilitySupport, CostTier, Model, ModelCapabilities, ModelCost};
 
@@ -17,6 +17,8 @@ struct CatalogModel {
     id: String,
     name: String,
     reasoning: bool,
+    #[serde(default)]
+    reasoning_options: Option<serde_json::Value>,
     input: Vec<String>,
     context_window: u32,
     max_tokens: u32,
@@ -38,6 +40,14 @@ fn raw_catalog(provider_id: &str) -> Option<&'static str> {
     Some(match provider_id {
         "deepseek" => include_str!("catalog/deepseek.json"),
         "zai" => include_str!("catalog/zai.json"),
+        "zai-coding-cn" => include_str!("catalog/zai-coding-cn.json"),
+        "moonshot-cn" => include_str!("catalog/moonshot-cn.json"),
+        "xiaomi-token-plan-cn" => include_str!("catalog/xiaomi-token-plan-cn.json"),
+        "xiaomi-token-plan-ams" => include_str!("catalog/xiaomi-token-plan-ams.json"),
+        "xiaomi-token-plan-sgp" => include_str!("catalog/xiaomi-token-plan-sgp.json"),
+        "qwen-token-plan" => include_str!("catalog/qwen-token-plan.json"),
+        "qwen-token-plan-cn" => include_str!("catalog/qwen-token-plan-cn.json"),
+        "qwen-token-plan-individual" => include_str!("catalog/qwen-token-plan-individual.json"),
         "minimax" => include_str!("catalog/minimax.json"),
         // The CN region serves the same catalog, stamped with its own
         // provider id and endpoint.
@@ -66,14 +76,27 @@ pub(crate) fn catalog_models(
     entries
         .into_iter()
         .map(|entry| Model {
+            allow_empty_thinking_signature: crate::models_dev::allows_unsigned_thinking(
+                provider_id,
+                &entry.id,
+            ),
             id: entry.id,
             name: entry.name,
             api,
             provider: provider_id.to_string(),
             base_url: base_url.to_string(),
             headers: Default::default(),
-            reasoning: reasoning_capability(
+            openai_reasoning_format: model_reasoning_format(
+                provider_id,
+                entry.reasoning_options.as_ref(),
+            ),
+            anthropic_reasoning_format: crate::models_dev::model_anthropic_reasoning_format(
+                provider_id,
+                entry.reasoning_options.as_ref(),
+            ),
+            reasoning: reasoning_from_options(
                 entry.reasoning,
+                entry.reasoning_options.as_ref(),
                 reasoning.token_budget_support(),
                 reasoning.efforts,
             ),

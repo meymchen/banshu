@@ -14,7 +14,8 @@ _Avoid_: model list, static models
 
 **Catalog Refresh**:
 A runtime fetch of models.dev that overrides same-id Catalog entries and adds
-new ones, with full metadata.
+new ones, with full metadata. Explicit retirement notices suppress a model
+until the catalog explicitly reinstates it.
 _Avoid_: dynamic catalog, remote catalog
 
 **Probe**:
@@ -24,12 +25,9 @@ them.
 _Avoid_: model listing, discovery call
 
 **Overlay**:
-The merged result of Catalog ← Catalog Refresh ← Probe that a provider serves
-as its model list. Its dynamic layers may be restored from an injected
-`ModelsStore` before optional network work. Stored Probe provenance is retained
-so a restored zero-means-unknown model still cannot overwrite Catalog or
-Catalog Refresh metadata. Failed, cancelled, and 304 refreshes preserve the
-last-known-good Overlay; a 304 only advances its checked-at time.
+The effective model set formed from Catalog, Catalog Refresh and Probe,
+including persisted source provenance and retirement notices. Failed,
+cancelled and unchanged refreshes preserve the last-known-good set.
 
 **Refresh Policy** (`RefreshOptions`):
 The application-owned decision about whether discovery may use the network,
@@ -57,13 +55,9 @@ _Avoid_: supported models, tool models
 
 **Reasoning Capability** (`ReasoningCapability`):
 What a model's metadata source attests about reasoning: the effort levels it
-accepts and whether an explicit token budget may be requested. Replaces a
-plain "supports reasoning" boolean so an unattested level is refused rather
-than quietly becoming a different one — the same honesty rule as Capability
-Support. A source that says only "this model reasons" attests whichever
-Reasoning Effort Vocabulary its provider declares, falling back to the baseline
-ladder `off`…`high` where the provider declares none; Probe models attest
-nothing.
+accepts and whether an explicit token budget may be requested. Model-published
+controls take precedence over provider fallback vocabularies; Probe models
+attest nothing.
 _Avoid_: reasoning flag, thinking support
 
 **Open-model Reasoning Declaration** (`OpenAiReasoningFormat::EnableThinking`,
@@ -442,26 +436,9 @@ _Avoid_: thinking tokens, budget clamp
 
 **Reasoning Effort Vocabulary**
 (`OpenAiCompat::reasoning_efforts` / `AnthropicCompat::reasoning_efforts`):
-The effort levels a provider's own reference documents, declared alongside its
-Reasoning Request Format and stamped onto the models it serves in place of the
-baseline ladder. A model metadata source says only *whether* a model reasons,
-never which levels it takes, so without this every provider would inherit the
-same invented default and a level the endpoint has never heard of would sail
-past the Reasoning preflight into a `400`. Declaring narrows *and* widens: a
-provider documenting `max` gets it, one documenting no `minimal` refuses it.
-
-A level the endpoint accepts but silently *remaps* onto another stays out of
-the vocabulary — attesting it would move the clamp banshu refuses to perform
-onto the server, where the caller cannot see it. This is why DeepSeek attests
-`off`/`low`/`high`/`max` and not `medium`/`xhigh`, which its reference maps
-onto `high`.
-
-Three states, the last two of which differ: declaring nothing keeps the
-baseline ladder, right for an endpoint whose shape has no effort field to
-constrain; declaring levels makes exactly those requestable; declaring an
-*empty* vocabulary makes none requestable and is right for an endpoint with no
-reasoning request field at all — those models may still stream thinking, but
-no effort can be asked of them, so `ReasoningCapability::reasons()` is `false`.
+The provider's fallback set of requestable reasoning efforts, used when model
+metadata supplies no controls. Explicit model controls take precedence;
+levels that the endpoint silently remaps are not attested as distinct efforts.
 _Avoid_: effort whitelist, level map
 
 **Reasoning preflight** (issue #42):

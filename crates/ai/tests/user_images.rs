@@ -8,8 +8,8 @@
 //! to the *older* images the gate lets through is
 //! `tests/context_normalization.rs`.
 //!
-//! One request fixture per image-capable protocol family: `glm-4.5v`
-//! (openai-completions, zai catalog) and `k3` (anthropic-messages, kimi
+//! One request fixture per image-capable protocol family: `mimo-v2.5`
+//! (openai-completions, xiaomi catalog) and `k3` (anthropic-messages, kimi
 //! catalog) are catalog-declared image models.
 
 use banshu_ai::{
@@ -83,18 +83,18 @@ fn image_message() -> Message {
     })
 }
 
-/// The zai catalog declares glm-4.5v image-capable; the fixture exercises the
+/// The xiaomi catalog declares mimo-v2.5 image-capable; the fixture exercises the
 /// declared capability, not a hand-set one (issue #21). Re-pointed at the mock.
 fn openai_image_model(server: &MockServer) -> Model {
-    let model = Provider::zai()
+    let model = Provider::xiaomi()
         .models()
         .iter()
-        .find(|m| m.id == "glm-4.5v")
-        .expect("glm-4.5v should be in the zai catalog")
+        .find(|m| m.id == "mimo-v2.5")
+        .expect("mimo-v2.5 should be in the xiaomi catalog")
         .clone();
     assert!(
         model.input.contains(&Modality::Image),
-        "zai catalog should declare glm-4.5v image-capable"
+        "xiaomi catalog should declare mimo-v2.5 image-capable"
     );
     model.with_base_url(server.uri())
 }

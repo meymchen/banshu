@@ -21,6 +21,9 @@ pub struct ModelsStoreEntry {
     /// Keeping their source preserves Catalog ← Catalog Refresh ← Probe after
     /// a process restart.
     pub probed_model_ids: Vec<String>,
+    /// Explicitly deprecated model ids. Persist these tombstones so neither
+    /// the bundled baseline nor Probe can resurrect retired models.
+    pub deprecated_model_ids: Vec<String>,
     /// When the remote sources last successfully validated this entry.
     pub checked_at: SystemTime,
     /// Catalog response ETag, when supplied.

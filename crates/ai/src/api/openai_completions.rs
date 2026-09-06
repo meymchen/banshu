@@ -8,6 +8,7 @@
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::protocol_event::ProtocolEvent;
 use super::{PreparedRequest, ProtocolAdapter, ProtocolEventStream, compute_cost};
@@ -22,8 +23,7 @@ use crate::provider::{
 };
 use crate::types::{
     ApiKind, AssistantContent, Context, Diagnostic, DiagnosticCode, Message, Model,
-    ReasoningEffort, ReasoningOptions, StopReason, ThinkingContent, ToolChoice, Usage, UserContent,
-    UserMessage,
+    ReasoningEffort, ReasoningOptions, StopReason, ToolChoice, Usage, UserContent, UserMessage,
 };
 
 /// The OpenAI-completions wire protocol.
@@ -120,6 +120,8 @@ impl ProtocolAdapter for OpenAiCompletions {
 
             let mut next_block_id: u64 = 0;
             let mut thinking_block_id: Option<u64> = None;
+            let mut details_block_id: Option<u64> = None;
+            let mut reasoning_details: Vec<Value> = Vec::new();
             let mut text_block_id: Option<u64> = None;
             let mut tools: Vec<ToolAccum> = Vec::new();
             let mut usage = Usage::default();
@@ -195,6 +197,15 @@ impl ProtocolAdapter for OpenAiCompletions {
                     usage = normalize_usage(chunk_usage);
                 }
                 if let Some(choice) = parsed.choices.into_iter().next() {
+                    for detail in choice.delta.reasoning_details.into_iter().flatten().filter(valid_reasoning_detail) {
+                        if details_block_id.is_none() {
+                            let block_id = next_block_id;
+                            next_block_id += 1;
+                            details_block_id = Some(block_id);
+                            yield ProtocolEvent::ThinkingStart { block_id, signature: None, redacted: false };
+                        }
+                        append_reasoning_detail(&mut reasoning_details, detail);
+                    }
                     // Endpoints disagree on the reasoning field name; take the
                     // first non-empty one (some send duplicates) and remember
                     // it as the block's signature so replay can use it.
@@ -335,6 +346,10 @@ impl ProtocolAdapter for OpenAiCompletions {
             // Close whatever blocks the wire left open, then report usage and
             // the formal stop. Tool calls stream per wire delta, so only their
             // ends remain.
+            if let Some(block_id) = details_block_id {
+                yield ProtocolEvent::ThinkingSignature { block_id, signature: Value::Array(reasoning_details).to_string() };
+                yield ProtocolEvent::ThinkingEnd { block_id };
+            }
             if let Some(block_id) = thinking_block_id {
                 yield ProtocolEvent::ThinkingEnd { block_id };
             }
@@ -353,6 +368,44 @@ impl ProtocolAdapter for OpenAiCompletions {
         };
 
         Box::pin(stream)
+    }
+}
+
+fn valid_reasoning_detail(detail: &Value) -> bool {
+    let field = match detail["type"].as_str() {
+        Some("reasoning.text") => "text",
+        Some("reasoning.summary") => "summary",
+        Some("reasoning.encrypted") => "data",
+        _ => return false,
+    };
+    detail[field].is_string()
+}
+
+fn append_reasoning_detail(details: &mut Vec<Value>, detail: Value) {
+    let field = match detail["type"].as_str() {
+        Some("reasoning.text") => Some("text"),
+        Some("reasoning.summary") => Some("summary"),
+        _ => None,
+    };
+    if let (Some(field), Some(last)) = (field, details.last_mut())
+        && last["type"] == detail["type"]
+        && ["id", "index", "format", "signature"]
+            .iter()
+            .all(|key| last[*key].is_null() || detail[*key].is_null() || last[*key] == detail[*key])
+    {
+        let text = format!(
+            "{}{}",
+            last[field].as_str().unwrap_or_default(),
+            detail[field].as_str().unwrap_or_default()
+        );
+        for (key, value) in detail.as_object().expect("validated detail") {
+            if last[key].is_null() {
+                last[key] = value.clone();
+            }
+        }
+        last[field] = Value::String(text);
+    } else {
+        details.push(detail);
     }
 }
 
@@ -414,6 +467,7 @@ fn normalize_usage(raw: &ChunkUsage) -> Usage {
                 .prompt_tokens_details
                 .as_ref()
                 .and_then(|details| details.cached_tokens)
+                .or(raw.cached_tokens)
                 .unwrap_or(0);
             let cache_write = raw
                 .prompt_tokens_details
@@ -421,13 +475,9 @@ fn normalize_usage(raw: &ChunkUsage) -> Usage {
                 .and_then(|details| details.cache_write_tokens)
                 .unwrap_or(0);
 
-            // Some compatible providers include current-request cache writes
-            // in `cached_tokens`; pi-ai removes writes from cache reads.
-            let cache_read = if cache_write > 0 {
-                reported_cached.saturating_sub(cache_write)
-            } else {
-                reported_cached
-            };
+            // Cache hits and cache writes are separate counts. Subtracting
+            // writes from hits would charge those hits as uncached input.
+            let cache_read = reported_cached;
             let input = raw
                 .prompt_tokens
                 .saturating_sub(cache_read)
@@ -521,6 +571,14 @@ fn reasoning_wire(
             enable_thinking: None,
             chat_template_kwargs: None,
         },
+        OpenAiReasoningFormat::ThinkingToggleWithHistory => ReasoningWire {
+            thinking: Some(ThinkingToggle {
+                clear_thinking: enabled.then_some(false),
+                ..ThinkingToggle::for_enabled(enabled)
+            }),
+            effort: enabled.then(|| effort_wire_value(reasoning.effort)),
+            ..ReasoningWire::default()
+        },
         // The shape carries no effort field at all; the ladder collapses onto
         // the toggle.
         OpenAiReasoningFormat::ThinkingToggleOnly => ReasoningWire {
@@ -534,6 +592,11 @@ fn reasoning_wire(
             effort: None,
             enable_thinking: Some(enabled),
             chat_template_kwargs: None,
+        },
+        OpenAiReasoningFormat::EnableThinkingWithEffort => ReasoningWire {
+            enable_thinking: Some(enabled),
+            effort: enabled.then(|| effort_wire_value(reasoning.effort)),
+            ..ReasoningWire::default()
         },
         OpenAiReasoningFormat::ChatTemplateKwargs(declaration) => {
             let mut kwargs = serde_json::Map::new();
@@ -716,29 +779,39 @@ fn build_request_body(
                 if !tool_calls.is_empty() {
                     wire["tool_calls"] = Value::Array(tool_calls);
                 }
-                // Replay thinking under the wire field it arrived in (recorded
-                // as the block's signature at capture time); signatureless
-                // thinking has nowhere faithful to go and is dropped.
-                let thinking: Vec<&ThinkingContent> = assistant
-                    .content
-                    .iter()
-                    .filter_map(|content| match content {
-                        AssistantContent::Thinking(block) if !block.thinking.trim().is_empty() => {
-                            Some(block)
+                let mut details = Vec::new();
+                for content in &assistant.content {
+                    let AssistantContent::Thinking(block) = content else {
+                        continue;
+                    };
+                    let Some(signature) = block.signature.as_deref() else {
+                        continue;
+                    };
+                    if matches!(
+                        signature,
+                        "reasoning_content" | "reasoning" | "reasoning_text"
+                    ) {
+                        if !block.thinking.is_empty() {
+                            let value = wire
+                                .as_object_mut()
+                                .expect("assistant object")
+                                .entry(signature)
+                                .or_insert_with(|| Value::String(String::new()));
+                            let mut text = value.as_str().unwrap_or_default().to_string();
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str(&block.thinking);
+                            *value = Value::String(text);
                         }
-                        _ => None,
-                    })
-                    .collect();
-                if let Some(field) = thinking
-                    .first()
-                    .and_then(|block| block.signature.as_deref())
-                    .filter(|field| !field.is_empty())
-                {
-                    let joined: Vec<&str> = thinking
-                        .iter()
-                        .map(|block| block.thinking.as_str())
-                        .collect();
-                    wire[field] = Value::String(joined.join("\n"));
+                    } else if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(signature)
+                        && items.iter().all(valid_reasoning_detail)
+                    {
+                        details.extend(items);
+                    }
+                }
+                if !details.is_empty() {
+                    wire["reasoning_details"] = Value::Array(details);
                 }
                 if compat.requires_reasoning_content_on_assistant_messages
                     && model.reasoning.reasons()
@@ -897,12 +970,15 @@ struct ChatRequest {
 struct ThinkingToggle {
     #[serde(rename = "type")]
     kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clear_thinking: Option<bool>,
 }
 
 impl ThinkingToggle {
     fn for_enabled(enabled: bool) -> Self {
         Self {
             kind: if enabled { "enabled" } else { "disabled" },
+            clear_thinking: None,
         }
     }
 }
@@ -951,6 +1027,8 @@ struct ChunkChoice {
 #[derive(Deserialize, Default)]
 struct Delta {
     #[serde(default)]
+    reasoning_details: Option<Vec<Value>>,
+    #[serde(default)]
     content: Option<String>,
     #[serde(default)]
     reasoning_content: Option<String>,
@@ -982,6 +1060,8 @@ struct FunctionDelta {
 
 #[derive(Deserialize, Default)]
 struct ChunkUsage {
+    #[serde(default)]
+    cached_tokens: Option<u64>,
     #[serde(default)]
     prompt_tokens: u64,
     #[serde(default)]

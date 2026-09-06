@@ -13,13 +13,13 @@ fn get_looks_up_models_by_provider_and_id() {
         )));
 
     let found = models
-        .get("deepseek", "deepseek-chat")
+        .get("deepseek", "deepseek-v4-flash")
         .expect("known model");
     assert_eq!(found.provider, "deepseek");
     assert_eq!(found.api, ApiKind::OpenAiCompletions);
 
     assert!(models.get("deepseek", "no-such-model").is_none());
-    assert!(models.get("unregistered", "deepseek-chat").is_none());
+    assert!(models.get("unregistered", "deepseek-v4-flash").is_none());
 }
 
 #[tokio::test]
@@ -67,12 +67,12 @@ fn set_provider_with_the_same_id_replaces_the_old_provider() {
 #[test]
 fn remove_provider_takes_it_out_of_lookup_and_listing() {
     let mut models = Models::new().with_provider(Provider::deepseek());
-    assert!(models.get("deepseek", "deepseek-chat").is_some());
+    assert!(models.get("deepseek", "deepseek-v4-flash").is_some());
 
     let removed = models.remove_provider("deepseek").expect("was registered");
     assert_eq!(removed.id(), "deepseek");
     assert!(models.provider("deepseek").is_none());
-    assert!(models.get("deepseek", "deepseek-chat").is_none());
+    assert!(models.get("deepseek", "deepseek-v4-flash").is_none());
     assert!(models.remove_provider("deepseek").is_none());
 }
 

@@ -19,7 +19,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const MODELS_DEV_JSON: &str = r#"{
   "deepseek": {
     "models": {
-      "deepseek-chat": {
+      "deepseek-v4-flash": {
         "name": "DeepSeek Chat",
         "reasoning": false,
         "modalities": { "input": ["text"] },
@@ -59,6 +59,7 @@ async fn offline_refresh_restores_the_stored_overlay_without_network() {
             provider_id: "deepseek".into(),
             models: vec![stored],
             probed_model_ids: Vec::new(),
+            deprecated_model_ids: Vec::new(),
             checked_at: SystemTime::now(),
             etag: Some("\"stored-v1\"".into()),
             last_modified: None,
@@ -116,7 +117,7 @@ async fn freshness_skips_network_and_force_bypasses_it() {
         entry
             .models
             .iter()
-            .any(|model| model.id == "deepseek-reasoner")
+            .any(|model| model.id == "deepseek-v4-pro")
     );
 
     let restored = Models::new()
@@ -236,6 +237,7 @@ async fn available_validators_are_sent_before_filling_a_missing_provider_entry()
             provider_id: "cached".into(),
             models: vec![cached],
             probed_model_ids: Vec::new(),
+            deprecated_model_ids: Vec::new(),
             checked_at: SystemTime::now(),
             etag: Some("\"catalog-v1\"".into()),
             last_modified: None,
@@ -340,6 +342,7 @@ async fn cancelled_probe_keeps_the_restored_overlay() {
             provider_id: "cancel-probe".into(),
             models: vec![stored],
             probed_model_ids: vec!["last-known-good".into()],
+            deprecated_model_ids: Vec::new(),
             checked_at: SystemTime::now(),
             etag: None,
             last_modified: None,
@@ -443,7 +446,7 @@ async fn refresh_overrides_and_appends_models_dev_entries() {
 
     // Same-id bundled entry is overridden by the refreshed metadata.
     let chat = models
-        .get("deepseek", "deepseek-chat")
+        .get("deepseek", "deepseek-v4-flash")
         .expect("known model");
     assert_eq!(chat.cost.input, 9.9);
     assert_eq!(chat.context_window, 131_072);
@@ -455,7 +458,7 @@ async fn refresh_overrides_and_appends_models_dev_entries() {
     assert_eq!(vnext.base_url, "https://api.deepseek.com");
 
     // Bundled entries absent from the refresh are kept, not removed.
-    assert!(models.get("deepseek", "deepseek-reasoner").is_some());
+    assert!(models.get("deepseek", "deepseek-v4-pro").is_some());
 }
 
 #[tokio::test]
@@ -606,7 +609,7 @@ async fn failed_models_dev_fetch_keeps_serving_the_bundled_catalog() {
         RefreshOutcome::Failed(_)
     ));
     // The bundled catalog is untouched by the failure.
-    assert!(models.get("deepseek", "deepseek-chat").is_some());
+    assert!(models.get("deepseek", "deepseek-v4-flash").is_some());
 }
 
 #[tokio::test]

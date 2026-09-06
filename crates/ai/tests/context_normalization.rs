@@ -122,13 +122,13 @@ fn text_only_anthropic_model(server: &MockServer) -> Model {
     Model::anthropic_messages("test-model").with_base_url(server.uri())
 }
 
-/// The zai catalog declares glm-4.5v image-capable (issue #21).
+/// The xiaomi catalog declares mimo-v2.5 image-capable (issue #21).
 fn openai_image_model(server: &MockServer) -> Model {
-    let model = Provider::zai()
+    let model = Provider::xiaomi()
         .models()
         .iter()
-        .find(|m| m.id == "glm-4.5v")
-        .expect("glm-4.5v should be in the zai catalog")
+        .find(|m| m.id == "mimo-v2.5")
+        .expect("mimo-v2.5 should be in the xiaomi catalog")
         .clone();
     assert!(model.input.contains(&Modality::Image));
     model.with_base_url(server.uri())

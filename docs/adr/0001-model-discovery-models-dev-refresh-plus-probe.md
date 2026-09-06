@@ -2,6 +2,13 @@
 
 Status: amended by issue #51 on 2026-08-23.
 
+The 2026-09-07 upstream compatibility update adds explicit retirement notices:
+Catalog Refresh persists deprecated model ids as tombstones. These suppress
+matching baseline and Probe entries after refresh and offline restoration;
+only an explicit active catalog entry reinstates them. Mere omission from a
+refresh remains additive and does not retire a model. Z.AI's Coding Plan
+endpoint now uses the `zai-coding-plan` source instead of the PAYG `zai` source.
+
 We want providers to discover models at runtime instead of relying only on the
 bundled catalog. The obvious design — query each vendor's `/v1/models` — was
 rejected as the primary mechanism because those endpoints return bare ids with
@@ -13,8 +20,7 @@ vendors — the same source our bundled catalog is generated from) and merges it
 over the catalog by id; vendor `/models` probes run second and only *append*
 unknown ids as zero-metadata models — their real value is custom
 OpenAI/Anthropic-compatible endpoints (llama.cpp, vLLM, gateways) that have no
-catalog at all. This mirrors pi, whose dynamic discovery is a remote-catalog
-overlay, not per-vendor listing.
+catalog at all.
 
 ## Consequences
 

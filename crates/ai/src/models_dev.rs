@@ -27,6 +27,11 @@ pub struct ModelsDevModel {
     pub name: String,
     /// Whether the model supports reasoning / thinking.
     pub reasoning: bool,
+    /// Provider-published reasoning controls. Missing metadata uses the
+    /// provider's legacy declaration; present metadata is authoritative.
+    pub reasoning_options: Option<Value>,
+    /// Retired entries are retained as tombstones during refresh.
+    pub deprecated: bool,
     /// Tool-calling support, mapped from models.dev `tool_call`.
     pub tool_calling: CapabilitySupport,
     /// Accepted input modalities; defaults to text when models.dev omits them.
@@ -45,7 +50,8 @@ impl ModelsDevModel {
     /// Whether the model belongs in an agent's model catalog: models.dev
     /// attests tool calling, and the model both accepts and produces text.
     pub fn is_tool_calling_text_model(&self) -> bool {
-        self.tool_calling == CapabilitySupport::Supported
+        !self.deprecated
+            && self.tool_calling == CapabilitySupport::Supported
             && self.input.contains(&Modality::Text)
             && self.output.contains(&Modality::Text)
     }
@@ -54,10 +60,8 @@ impl ModelsDevModel {
 /// Map a models.dev-style `reasoning` boolean plus what the owning provider
 /// declares about its endpoint onto a [`ReasoningCapability`].
 ///
-/// A model metadata source says only *whether* a model reasons, never which
-/// levels it takes — so the ladder has to come from somewhere else, and the
-/// only honest source is the provider's own reference. `efforts` carries what
-/// that reference documents; `None` means the provider names no vocabulary and
+/// Used only when model-level reasoning controls are absent. `efforts`
+/// carries the provider's fallback vocabulary; `None` means it names none and
 /// the model falls back to the [`BASELINE`](ReasoningCapability::BASELINE)
 /// ladder, which is right for an endpoint whose request shape has no effort
 /// field to constrain.
@@ -65,8 +69,8 @@ impl ModelsDevModel {
 /// `false` attests no level at all, and a model that does not reason cannot
 /// take a reasoning budget either.
 ///
-/// Both the bundled catalog and the runtime Catalog Refresh go through here,
-/// so the two can never disagree about what a `reasoning` flag means.
+/// Both catalog consumers use [`reasoning_from_options`], which calls this
+/// fallback only when the source supplies no model-level control metadata.
 pub fn reasoning_capability(
     reasoning: bool,
     token_budget: CapabilitySupport,
@@ -80,6 +84,112 @@ pub fn reasoning_capability(
         None => ReasoningCapability::baseline(),
     };
     ladder.with_token_budget(token_budget)
+}
+
+/// Resolve model-published controls before falling back to a provider-wide
+/// vocabulary. Unknown values are never promoted to supported effort levels.
+pub fn reasoning_from_options(
+    reasoning: bool,
+    options: Option<&Value>,
+    token_budget: CapabilitySupport,
+    fallback: Option<&[ReasoningEffort]>,
+) -> ReasoningCapability {
+    let Some(options) = options.filter(|_| reasoning) else {
+        return reasoning_capability(reasoning, token_budget, fallback);
+    };
+    let controls: Vec<&Value> = match options {
+        Value::Array(items) => items.iter().collect(),
+        other => vec![other],
+    };
+    let mut efforts = Vec::new();
+    let mut toggle = false;
+    let mut graded = false;
+    for control in controls {
+        match control["type"].as_str() {
+            Some("toggle") => toggle = true,
+            Some("effort") => {
+                graded = true;
+                if let Some(values) = control["values"].as_array() {
+                    for value in values {
+                        let value = value.as_str().unwrap_or("");
+                        if value == "none" {
+                            efforts.push(ReasoningEffort::Off);
+                        } else if let Some(effort) = ReasoningEffort::ALL
+                            .into_iter()
+                            .find(|e| e.as_str() == value)
+                        {
+                            efforts.push(effort);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if toggle {
+        efforts.push(ReasoningEffort::Off);
+        if !graded {
+            efforts.extend(ReasoningCapability::BASELINE);
+        }
+    }
+    ReasoningCapability::new(efforts).with_token_budget(token_budget)
+}
+
+/// Wire overrides for documented model controls on the bundled endpoints.
+/// Metadata describes capabilities, not an arbitrary HTTP payload; unknown
+/// sources keep the caller's provider declaration unchanged.
+pub(crate) fn model_reasoning_format(
+    source: &str,
+    options: Option<&Value>,
+) -> Option<crate::OpenAiReasoningFormat> {
+    use crate::OpenAiReasoningFormat as Format;
+    let options = options?;
+    let controls: Vec<&Value> = match options {
+        Value::Array(items) => items.iter().collect(),
+        other => vec![other],
+    };
+    let effort = controls.iter().any(|v| v["type"] == "effort");
+    let toggle = controls.iter().any(|v| v["type"] == "toggle");
+    match source {
+        "alibaba-token-plan"
+        | "alibaba-token-plan-cn"
+        | "qwen-token-plan"
+        | "qwen-token-plan-cn"
+        | "qwen-token-plan-individual"
+            if effort =>
+        {
+            Some(Format::EnableThinkingWithEffort)
+        }
+        "zai" | "zai-coding-plan" | "zai-coding-cn" | "zhipuai-coding-plan" if effort => {
+            Some(Format::ThinkingToggleWithHistory)
+        }
+        "moonshot" | "moonshotai" | "moonshotai-cn" | "moonshot-cn" if effort => {
+            Some(Format::ReasoningEffort)
+        }
+        "moonshot" | "moonshotai" | "moonshotai-cn" | "moonshot-cn" if toggle => {
+            Some(Format::ThinkingToggleOnly)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn allows_unsigned_thinking(source: &str, id: &str) -> bool {
+    matches!(source, "kimi" | "kimi-for-coding") && matches!(id, "k3" | "kimi-for-coding")
+}
+
+pub(crate) fn model_anthropic_reasoning_format(
+    source: &str,
+    options: Option<&Value>,
+) -> Option<crate::AnthropicReasoningFormat> {
+    if !matches!(source, "kimi" | "kimi-for-coding") {
+        return None;
+    }
+    let options = options?;
+    let has_effort = match options {
+        Value::Array(items) => items.iter().any(|item| item["type"] == "effort"),
+        other => other["type"] == "effort",
+    };
+    has_effort.then_some(crate::AnthropicReasoningFormat::ThinkingAdaptiveWithEffort)
 }
 
 /// Map models.dev `tool_call` onto [`CapabilitySupport`]: `true` → Supported,
@@ -105,13 +215,62 @@ pub fn modality_from_str(modality: &str) -> Option<Modality> {
 /// Parse the models.dev entries for `provider_key`. `None` if the key is
 /// missing or malformed.
 pub fn models_from_api_json(data: &Value, provider_key: &str) -> Option<Vec<ModelsDevModel>> {
-    let models = data.get(provider_key)?.get("models")?.as_object()?;
+    let source = if provider_key == "qwen-token-plan-individual" {
+        "alibaba-token-plan"
+    } else {
+        provider_key
+    };
+    let models = data.get(source)?.get("models")?.as_object()?;
     Some(
         models
             .iter()
-            .map(|(id, entry)| parse_model(id, entry))
+            .filter(|(id, _)| model_allowed(provider_key, id))
+            .map(|(id, entry)| {
+                let mut model = parse_model(id, entry);
+                if matches!(source, "zai-coding-plan" | "zhipuai-coding-plan")
+                    && let Some(reference) = data
+                        .get("zai")
+                        .and_then(|p| p.get("models"))
+                        .and_then(|m| m.get(id))
+                    && reference.get("cost").is_some()
+                {
+                    model.cost = parse_model(id, reference).cost;
+                }
+                if matches!(source, "alibaba-token-plan" | "alibaba-token-plan-cn") {
+                    model.deprecated |= id == "qwen3.8-max-preview";
+                    if matches!(id.as_str(), "glm-5" | "glm-5.1") {
+                        let options = model
+                            .reasoning_options
+                            .get_or_insert_with(|| Value::Array(Vec::new()));
+                        if let Some(controls) = options.as_array_mut()
+                            && !controls.iter().any(|v| v["type"] == "effort")
+                        {
+                            controls
+                                .push(serde_json::json!({"type":"effort","values":["high","max"]}));
+                        }
+                    }
+                }
+                model
+            })
             .collect(),
     )
+}
+
+// Model allowlist for QwenCloud's Individual plan.
+const QWEN_INDIVIDUAL_MODELS: &[&str] = &[
+    "deepseek-v4-flash-0731",
+    "deepseek-v4-pro",
+    "deepseek-v4-pro-0813",
+    "glm-5.2",
+    "qwen3.6-flash",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+    "qwen3.8-flash",
+    "qwen3.8-max",
+];
+
+pub(crate) fn model_allowed(source: &str, id: &str) -> bool {
+    source != "qwen-token-plan-individual" || QWEN_INDIVIDUAL_MODELS.contains(&id)
 }
 
 fn parse_model(id: &str, entry: &Value) -> ModelsDevModel {
@@ -120,6 +279,8 @@ fn parse_model(id: &str, entry: &Value) -> ModelsDevModel {
         id: id.to_string(),
         name: entry["name"].as_str().unwrap_or(id).to_string(),
         reasoning: entry["reasoning"].as_bool().unwrap_or(false),
+        reasoning_options: entry.get("reasoning_options").cloned(),
+        deprecated: entry["status"].as_str() == Some("deprecated"),
         tool_calling: capability_from_tool_call(entry["tool_call"].as_bool()),
         input: modalities(&entry["modalities"]["input"]).unwrap_or_else(|| vec![Modality::Text]),
         output: modalities(&entry["modalities"]["output"]).unwrap_or_default(),

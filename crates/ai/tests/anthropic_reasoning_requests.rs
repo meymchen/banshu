@@ -82,6 +82,7 @@ fn provider(id: &str, server: &MockServer) -> Provider {
         // caller pointing `anthropic_compatible` at an endpoint that documents
         // `budget_tokens` declares it themselves.
         "budget" => custom(id, AnthropicReasoningFormat::ThinkingBudget, server),
+        "toggle" => custom(id, AnthropicReasoningFormat::ThinkingToggle, server),
         "silent" => custom(id, AnthropicReasoningFormat::Unsupported, server),
         other => panic!("`{other}` is not an Anthropic-compatible provider under test"),
     }
@@ -265,11 +266,9 @@ async fn attested_levels_above_off(provider_id: &str) -> Vec<ReasoningEffort> {
 
 #[tokio::test]
 async fn the_thinking_toggle_shape_enables_with_the_toggle_alone() {
-    // Kimi's reference switches thinking with `thinking.type` and documents no
-    // budget and no effort field, so every attested level above `Off` reads as
-    // "enabled" and nothing rides along.
-    for effort in attested_levels_above_off("kimi").await {
-        let body = sent_for("kimi", Some(ReasoningOptions::new(effort))).await;
+    // A custom toggle-only declaration has no budget or effort field.
+    for effort in attested_levels_above_off("toggle").await {
+        let body = sent_for("toggle", Some(ReasoningOptions::new(effort))).await;
         carries_only(&body, &[("thinking", json!({ "type": "enabled" }))]);
     }
 }
@@ -768,7 +767,8 @@ async fn an_enabled_request_replays_signed_thinking_verbatim() {
     assert_eq!(message.error_kind, None);
 
     let body = request_bodies(&server).await.remove(0);
-    assert_eq!(body["thinking"], json!({ "type": "enabled" }));
+    assert_eq!(body["thinking"], json!({ "type": "adaptive" }));
+    assert_eq!(body["output_config"]["effort"], "high");
     assert_eq!(
         body["messages"][1]["content"][0],
         json!({

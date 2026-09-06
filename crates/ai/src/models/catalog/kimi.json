@@ -3,6 +3,19 @@
     "id": "k3",
     "name": "Kimi K3",
     "reasoning": true,
+    "reasoning_options": [
+      {
+        "type": "toggle"
+      },
+      {
+        "type": "effort",
+        "values": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    ],
     "input": [
       "text",
       "image"
@@ -20,6 +33,16 @@
     "id": "k3-256k",
     "name": "Kimi K3-256K",
     "reasoning": true,
+    "reasoning_options": [
+      {
+        "type": "effort",
+        "values": [
+          "low",
+          "high",
+          "max"
+        ]
+      }
+    ],
     "input": [
       "text",
       "image"
@@ -37,6 +60,7 @@
     "id": "kimi-for-coding",
     "name": "Kimi K2.7 Code",
     "reasoning": true,
+    "reasoning_options": [],
     "input": [
       "text",
       "image"
@@ -54,6 +78,7 @@
     "id": "kimi-for-coding-highspeed",
     "name": "Kimi For Coding HighSpeed",
     "reasoning": true,
+    "reasoning_options": [],
     "input": [
       "text",
       "image"

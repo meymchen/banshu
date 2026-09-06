@@ -6,7 +6,7 @@ use crate::types::ReasoningCapability;
 /// Which wire protocol a model speaks. Used for identification and to route
 /// the model to the matching [`ProtocolAdapter`](crate::ProtocolAdapter).
 ///
-/// Serializes to pi-ai's stable api id strings.
+/// Serializes to stable protocol identifiers.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ApiKind {
@@ -169,6 +169,13 @@ pub struct Model {
     /// reasoning request against this model is refused; see
     /// [`ReasoningCapability`].
     pub reasoning: ReasoningCapability,
+    /// Model-specific OpenAI reasoning wire declaration. `None` inherits the
+    /// provider's format. Catalogs only set this for documented endpoints.
+    pub openai_reasoning_format: Option<crate::OpenAiReasoningFormat>,
+    /// Model-specific Anthropic reasoning wire declaration, when attested.
+    pub anthropic_reasoning_format: Option<crate::AnthropicReasoningFormat>,
+    /// This model accepts unsigned Anthropic thinking blocks during replay.
+    pub allow_empty_thinking_signature: bool,
     /// Accepted input modalities.
     pub input: Vec<Modality>,
     /// Capability attestations from the model's metadata source.
@@ -192,6 +199,15 @@ impl std::fmt::Debug for Model {
             .field("base_url", &self.base_url)
             .field("headers", &RedactedHeaders(&self.headers))
             .field("reasoning", &self.reasoning)
+            .field("openai_reasoning_format", &self.openai_reasoning_format)
+            .field(
+                "anthropic_reasoning_format",
+                &self.anthropic_reasoning_format,
+            )
+            .field(
+                "allow_empty_thinking_signature",
+                &self.allow_empty_thinking_signature,
+            )
             .field("input", &self.input)
             .field("capabilities", &self.capabilities)
             .field("cost", &self.cost)
@@ -214,6 +230,9 @@ impl Model {
             base_url: String::new(),
             headers: ProviderHeaders::new(),
             reasoning: ReasoningCapability::none(),
+            openai_reasoning_format: None,
+            anthropic_reasoning_format: None,
+            allow_empty_thinking_signature: false,
             input: vec![Modality::Text],
             capabilities: ModelCapabilities::default(),
             cost: ModelCost::default(),
@@ -233,6 +252,9 @@ impl Model {
             base_url: String::new(),
             headers: ProviderHeaders::new(),
             reasoning: ReasoningCapability::none(),
+            openai_reasoning_format: None,
+            anthropic_reasoning_format: None,
+            allow_empty_thinking_signature: false,
             input: vec![Modality::Text],
             capabilities: ModelCapabilities::default(),
             cost: ModelCost::default(),

@@ -8,7 +8,7 @@ use banshu_ai::{Context, Model, Provider, StopReason, StreamOptions};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// OpenAI-style streaming chunks, borrowed from pi's fixture shape.
+/// OpenAI-style streaming response chunks.
 const SSE_BODY: &str = concat!(
     "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello, world!\"},\"finish_reason\":null}]}\n\n",
     "data: {\"id\":\"chatcmpl-1\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n",

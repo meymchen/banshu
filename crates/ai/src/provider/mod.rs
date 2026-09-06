@@ -5,6 +5,7 @@
 //! [`Provider::builder`] directly.
 
 mod builder;
+mod regions;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -272,6 +273,9 @@ pub enum OpenAiReasoningFormat {
     ///
     /// Declared by [`Provider::deepseek`].
     ThinkingToggle,
+    /// A thinking toggle with graded effort and `clear_thinking: false`
+    /// while enabled, preserving Z.AI's historical reasoning across turns.
+    ThinkingToggleWithHistory,
     /// The same toggle and *only* the toggle: no effort string rides along in
     /// either direction, so any level above `Off` reads as
     /// `thinking: { "type": "enabled" }` and `Off` as
@@ -287,6 +291,8 @@ pub enum OpenAiReasoningFormat {
     /// A top-level `enable_thinking: true | false` boolean. Every enabled
     /// effort maps to `true`; [`ReasoningEffort::Off`] maps to `false`.
     EnableThinking,
+    /// Top-level `enable_thinking` plus `reasoning_effort` while enabled.
+    EnableThinkingWithEffort,
     /// Typed reasoning substitutions nested under `chat_template_kwargs`.
     ChatTemplateKwargs(OpenAiChatTemplateKwargs),
 }
@@ -354,6 +360,9 @@ pub enum AnthropicReasoningFormat {
     ///
     /// Declared by [`Provider::minimax`].
     ThinkingAdaptive,
+    /// Adaptive thinking plus `output_config.effort` for models that publish
+    /// a graded effort vocabulary (for example Kimi K3).
+    ThinkingAdaptiveWithEffort,
 }
 
 impl AnthropicReasoningFormat {
@@ -568,12 +577,9 @@ pub struct OpenAiCompat {
     /// [`BASELINE`](crate::ReasoningCapability::BASELINE) ladder on the models
     /// this provider serves.
     ///
-    /// A model metadata source says only *whether* a model reasons — never
-    /// which levels it takes — so without this the ladder would be the same
-    /// invented default everywhere, and a level the endpoint has never heard
-    /// of would sail past the reasoning preflight into a `400`. Declaring the
-    /// vocabulary narrows *and* widens: a provider documenting `max` gets it,
-    /// one documenting no `minimal` refuses it.
+    /// This fallback applies when the model source omits reasoning controls.
+    /// Explicit model-level `reasoning_options` takes precedence, including an
+    /// empty list that attests no requestable effort.
     ///
     /// Attest only what the reference actually offers. A level the endpoint
     /// accepts but silently remaps onto another belongs *out* of the list —
@@ -588,7 +594,7 @@ pub struct OpenAiCompat {
     /// - `Some(&[…])` — exactly these levels are requestable.
     /// - `Some(&[])` — no level is, so
     ///   [`ReasoningCapability::reasons`](crate::ReasoningCapability::reasons)
-    ///   reports `false` for every model this provider serves. Right for an
+    ///   reports `false` for models using this fallback. Right for an
     ///   endpoint with no reasoning request field at all: those models may
     ///   still stream thinking, but no effort can be *asked* of them.
     pub reasoning_efforts: Option<&'static [ReasoningEffort]>,
@@ -693,6 +699,7 @@ pub struct AnthropicCompat {
 /// untouched; it is lost when the process exits.
 #[derive(Default)]
 struct Overlay {
+    deprecated_model_ids: Vec<String>,
     /// models.dev catalog-refresh entries (full metadata; override + append).
     refreshed: Vec<Model>,
     /// Probe-synthesized models (bare ids; append-only, zero-means-unknown).
@@ -853,8 +860,9 @@ impl Provider {
 
     /// Z.AI (GLM coding plan) — OpenAI-compatible, `ZAI_API_KEY`.
     ///
-    /// Reasoning: a binary `thinking` toggle, no graded effort. Tool choice:
-    /// `auto` only — the only value its reference lists.
+    /// Reasoning defaults to a `thinking` toggle. Catalog models that publish
+    /// graded effort override this with a history-preserving toggle and
+    /// `reasoning_effort`. Tool choice: `auto` only.
     pub fn zai() -> Self {
         Self::openai_compatible(
             "zai",
@@ -870,7 +878,7 @@ impl Provider {
             },
             ..OpenAiCompat::default()
         })
-        .with_models_dev_id("zai")
+        .with_models_dev_id("zai-coding-plan")
     }
 
     /// MiniMax — Anthropic-compatible, OAuth via the frozen Coding Plan portal
@@ -940,11 +948,9 @@ impl Provider {
 
     /// Moonshot AI — OpenAI-compatible, `MOONSHOT_API_KEY`.
     ///
-    /// Reasoning: none on the request side — Moonshot's thinking models decide
-    /// for themselves, and the endpoint takes no reasoning field, so asking
-    /// for a level is refused instead of silently dropped. Its models
-    /// therefore attest no level either: a thinking model whose thinking
-    /// cannot be steered is not a model you can request an effort from.
+    /// Reasoning defaults to no request control for legacy models. Catalog
+    /// models with published controls override this per model: Kimi K3 uses
+    /// graded effort; toggle-only models send just the thinking toggle.
     ///
     /// Tool choice: all four choices and strict tool schemas, as its chat
     /// reference documents.
@@ -975,12 +981,9 @@ impl Provider {
     /// `KIMI_API_KEY` environment variable is an explicit operator choice and
     /// wins over the stored credential.
     ///
-    /// Reasoning: the bare `thinking` toggle. Kimi's reference switches
-    /// thinking with `thinking: { "type": … }` and states outright that its
-    /// models take no `budget_tokens`; the graded `reasoning_effort` its newest
-    /// model accepts is a top-level field of Kimi's *OpenAI-compatible*
-    /// platform API, not of the coding endpoint's Anthropic shape, so no effort
-    /// rides along here.
+    /// Reasoning defaults to the bare `thinking` toggle without token budgets.
+    /// Models with published graded controls, including K3, override it with
+    /// adaptive thinking and `output_config.effort` on this Anthropic endpoint.
     ///
     /// Tool choice: none declared — Kimi publishes no parameter-level
     /// reference for the coding endpoint's Anthropic shape, so an explicit
@@ -1113,6 +1116,13 @@ impl Provider {
                 merged.push(model.clone());
             }
         }
+        merged.retain(|model| {
+            !overlay.deprecated_model_ids.contains(&model.id)
+                && crate::models_dev::model_allowed(
+                    self.models_dev_id.as_deref().unwrap_or_default(),
+                    &model.id,
+                )
+        });
         merged
     }
 
@@ -1135,10 +1145,18 @@ impl Provider {
             self.declared_reasoning(self.api_kind),
         ) {
             Some(models) => {
-                self.overlay
-                    .write()
-                    .expect("model overlay lock poisoned")
-                    .refreshed = models;
+                let parsed = crate::models_dev::models_from_api_json(data, key)
+                    .expect("the catalog was parsed above");
+                let mut overlay = self.overlay.write().expect("model overlay lock poisoned");
+                // Keep known retirements when a later catalog omits the id;
+                // only an explicit active entry can reinstate it.
+                for entry in parsed {
+                    overlay.deprecated_model_ids.retain(|id| id != &entry.id);
+                    if entry.deprecated {
+                        overlay.deprecated_model_ids.push(entry.id);
+                    }
+                }
+                overlay.refreshed = models;
                 RefreshOutcome::Refreshed
             }
             None => RefreshOutcome::Failed(format!("models.dev has no models for `{key}`")),
@@ -1148,9 +1166,13 @@ impl Provider {
     /// Restore the two discovery layers without changing their precedence.
     pub(crate) fn restore_overlay(&self, entry: &crate::ModelsStoreEntry) {
         let mut overlay = self.overlay.write().expect("model overlay lock poisoned");
-        if !overlay.refreshed.is_empty() || !overlay.probed.is_empty() {
+        if !overlay.refreshed.is_empty()
+            || !overlay.probed.is_empty()
+            || !overlay.deprecated_model_ids.is_empty()
+        {
             return;
         }
+        overlay.deprecated_model_ids = entry.deprecated_model_ids.clone();
         overlay.refreshed = entry
             .models
             .iter()
@@ -1235,6 +1257,9 @@ impl Provider {
                 headers: Default::default(),
                 // A bare id attests nothing: no reasoning level, no budget.
                 reasoning: crate::types::ReasoningCapability::none(),
+                openai_reasoning_format: None,
+                anthropic_reasoning_format: None,
+                allow_empty_thinking_signature: false,
                 input: vec![crate::types::Modality::Text],
                 // A bare id attests nothing: capabilities stay Unknown.
                 capabilities: crate::types::ModelCapabilities::default(),
@@ -1251,7 +1276,7 @@ impl Provider {
     }
 
     /// Snapshot the complete effective model set and retain Probe provenance.
-    pub(crate) fn overlay_snapshot(&self) -> (Vec<Model>, Vec<String>) {
+    pub(crate) fn overlay_snapshot(&self) -> (Vec<Model>, Vec<String>, Vec<String>) {
         let overlay = self.overlay.read().expect("model overlay lock poisoned");
         let catalog = crate::models::catalog_models(
             &self.id,
@@ -1261,6 +1286,14 @@ impl Provider {
         );
         let mut probed_model_ids = Vec::new();
         for model in &overlay.probed {
+            if overlay.deprecated_model_ids.contains(&model.id)
+                || !crate::models_dev::model_allowed(
+                    self.models_dev_id.as_deref().unwrap_or_default(),
+                    &model.id,
+                )
+            {
+                continue;
+            }
             if self
                 .models
                 .iter()
@@ -1272,8 +1305,9 @@ impl Provider {
             }
             probed_model_ids.push(model.id.clone());
         }
+        let deprecated_model_ids = overlay.deprecated_model_ids.clone();
         drop(overlay);
-        (self.models(), probed_model_ids)
+        (self.models(), probed_model_ids, deprecated_model_ids)
     }
 
     /// Refresh this provider's dynamic models without a registry: fetch

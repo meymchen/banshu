@@ -259,11 +259,12 @@ impl Models {
                             last_modified: prior.as_ref().and_then(|entry| entry.last_modified.clone()),
                         },
                     };
-                    let (models, probed_model_ids) = provider.overlay_snapshot();
+                    let (models, probed_model_ids, deprecated_model_ids) = provider.overlay_snapshot();
                     if let Err(error) = store.set(ModelsStoreEntry {
                         provider_id: provider.id().to_string(),
                         models,
                         probed_model_ids,
+                        deprecated_model_ids,
                         checked_at: std::time::SystemTime::now(),
                         etag: validators.etag,
                         last_modified: validators.last_modified,

@@ -235,6 +235,20 @@ pub(crate) fn drive(
     let auth = auth.clone();
     let provider_headers = headers.clone();
     let http_client = http_client.clone();
+    let openai_compat = OpenAiCompat {
+        reasoning_format: model
+            .openai_reasoning_format
+            .unwrap_or(openai_compat.reasoning_format),
+        ..openai_compat
+    };
+    let anthropic_compat = AnthropicCompat {
+        reasoning_format: model
+            .anthropic_reasoning_format
+            .unwrap_or(anthropic_compat.reasoning_format),
+        allow_empty_signature: anthropic_compat.allow_empty_signature
+            || model.allow_empty_thinking_signature,
+        ..anthropic_compat
+    };
 
     let stream = async_stream::stream! {
         let initial_message = AssistantMessage::streaming(

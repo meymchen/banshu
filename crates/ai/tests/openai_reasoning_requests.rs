@@ -107,6 +107,14 @@ fn options(reasoning: Option<ReasoningOptions>) -> StreamOptions {
 /// whose models therefore attest no level; the last is `reasoning-effort`.
 fn reasoning_model(provider: &Provider, server: &MockServer) -> Model {
     let models = provider.models();
+    if provider.id() == "moonshot" {
+        return models
+            .iter()
+            .find(|m| m.id == "kimi-k2-thinking")
+            .unwrap()
+            .clone()
+            .with_base_url(server.uri());
+    }
     if let Some(model) = models
         .iter()
         .find(|model| model.reasoning.reasons())

@@ -28,8 +28,8 @@ async fn main() {
     let model = provider
         .models()
         .into_iter()
-        .find(|model| model.id == "deepseek-chat")
-        .expect("deepseek-chat is in the bundled catalog");
+        .find(|model| model.id == "deepseek-v4-flash")
+        .expect("deepseek-v4-flash is in the bundled catalog");
 
     let message = provider
         .stream(
@@ -100,6 +100,20 @@ header policy.
 Completions. `Provider::kimi` and `minimax` use Anthropic Messages. The
 [provider conformance matrix](https://github.com/meymchen/banshu/blob/main/docs/provider-conformance.md) records the exact
 auth and feature contract for each bundled provider.
+
+Regional and subscription constructors also use OpenAI Chat Completions:
+`zai_coding_cn`, `moonshot_cn`, `xiaomi_token_plan_cn`,
+`xiaomi_token_plan_ams`, `xiaomi_token_plan_sgp`, `qwen_token_plan`,
+`qwen_token_plan_cn`, and `qwen_token_plan_individual`. Each has its own
+catalog; Qwen Individual applies its published model allowlist during
+offline lookup, Catalog Refresh and Probe.
+
+Model-published `reasoning_options` determine the supported efforts. For
+example, DeepSeek V4 Pro accepts `high` and `max`, while V4 Flash also accepts
+`low`. Catalog models may override the provider's reasoning wire format, so
+Kimi K3 and newer GLM models can send graded efforts without changing the
+request format used by older models. An explicit deprecated entry is hidden
+after refresh, including after a stored Overlay is restored offline.
 
 ## Custom providers
 

@@ -180,7 +180,7 @@ impl ProtocolAdapter for AnthropicMessages {
                         let (kind, start) = match block["type"].as_str() {
                             Some("thinking") => (WireBlockKind::Thinking, ProtocolEvent::ThinkingStart {
                                 block_id,
-                                signature: None,
+                                signature: block["signature"].as_str().map(str::to_string),
                                 redacted: false,
                             }),
                             // Redacted thinking arrives whole: an opaque
@@ -202,6 +202,18 @@ impl ProtocolAdapter for AnthropicMessages {
                         }
                         blocks[index] = Some(WireBlock { kind, ended: false });
                         yield start;
+                        // Some compatible endpoints put the first (or entire)
+                        // text/thinking fragment in content_block_start.
+                        if let Some(text) = block["text"].as_str().filter(|s| !s.is_empty())
+                            && matches!(kind, WireBlockKind::Text)
+                        {
+                            yield ProtocolEvent::TextDelta { block_id, delta: text.to_string() };
+                        }
+                        if let Some(thinking) = block["thinking"].as_str().filter(|s| !s.is_empty())
+                            && matches!(kind, WireBlockKind::Thinking)
+                        {
+                            yield ProtocolEvent::ThinkingDelta { block_id, delta: thinking.to_string() };
+                        }
                     }
                     Some("content_block_delta") => {
                         let index = value["index"].as_u64().unwrap_or(0) as usize;
@@ -475,7 +487,8 @@ fn thinking_wire(
         // omitting the field would leave a thinking model thinking.
         _ if reasoning.effort == ReasoningEffort::Off => Some(ThinkingRequest::disabled()),
         AnthropicReasoningFormat::ThinkingToggle => Some(ThinkingRequest::enabled()),
-        AnthropicReasoningFormat::ThinkingAdaptive => Some(ThinkingRequest::adaptive()),
+        AnthropicReasoningFormat::ThinkingAdaptive
+        | AnthropicReasoningFormat::ThinkingAdaptiveWithEffort => Some(ThinkingRequest::adaptive()),
         AnthropicReasoningFormat::ThinkingBudget => {
             let budget = thinking_budget(reasoning, max_tokens);
             debug_assert!(
@@ -692,6 +705,14 @@ fn build_request_body(
         tools,
         stream: true,
         temperature: options.temperature,
+        output_config: options
+            .reasoning
+            .as_ref()
+            .filter(|reasoning| {
+                compat.reasoning_format == AnthropicReasoningFormat::ThinkingAdaptiveWithEffort
+                    && reasoning.effort != ReasoningEffort::Off
+            })
+            .map(|reasoning| serde_json::json!({"effort": reasoning.effort.as_str()})),
         thinking: thinking_wire(
             compat.reasoning_format,
             options.reasoning.as_ref(),
@@ -733,6 +754,8 @@ struct MessagesRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<ThinkingRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<Value>,
 }

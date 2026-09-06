@@ -15,9 +15,9 @@
     "context_window": 1048576,
     "max_tokens": 131072,
     "cost": {
-      "input": 0.14,
-      "output": 0.28,
-      "cache_read": 0.0028,
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
       "cache_write": 0.0
     }
   },
@@ -36,30 +36,9 @@
     "context_window": 1048576,
     "max_tokens": 131072,
     "cost": {
-      "input": 0.435,
-      "output": 0.87,
-      "cache_read": 0.0036,
-      "cache_write": 0.0
-    }
-  },
-  {
-    "id": "mimo-v2.5-pro-ultraspeed",
-    "name": "MiMo-V2.5-Pro-UltraSpeed",
-    "reasoning": true,
-    "reasoning_options": [
-      {
-        "type": "toggle"
-      }
-    ],
-    "input": [
-      "text"
-    ],
-    "context_window": 1048576,
-    "max_tokens": 131072,
-    "cost": {
-      "input": 1.305,
-      "output": 2.61,
-      "cache_read": 0.0108,
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
       "cache_write": 0.0
     }
   }
