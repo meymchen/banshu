@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Regional Z.AI Coding CN, Moonshot CN, Xiaomi Token Plan CN/AMS/SGP, and
+  Qwen Token Plan international/CN/Individual providers with bundled catalogs.
+- DeepSeek V4 Flash Vision Exp in the offline catalog.
+- Model-specific reasoning wire declarations, including graded Z.AI, Moonshot
+  K3, Kimi K3 and Qwen Token Plan requests.
+
+### Fixed
+
+- Use the Coding Plan model source for Z.AI, retaining published API-equivalent
+  cost estimates when available.
+- Preserve model-level `reasoning_options` instead of applying one effort
+  vocabulary to every model from a vendor.
+- Exclude deprecated models from generated catalogs and persist refresh
+  tombstones so the baseline and Probe cannot restore retired models.
+- Count Moonshot's top-level `cached_tokens` as cache reads and keep cache
+  writes separate from cache hits.
+- Preserve and replay OpenAI-compatible `reasoning_details`, merging streamed
+  text/summary fragments while retaining encrypted entries and their order.
+- Preserve initial Anthropic text/thinking content and replay unsigned thinking
+  for Kimi models that accept it.
+
+### Migration
+
+- `Model` struct literals need `openai_reasoning_format`,
+  `anthropic_reasoning_format` (default `None`) and
+  `allow_empty_thinking_signature` (default `false`). The model constructors
+  initialize these fields. Custom model stores must retain these declarations.
+- `ModelsStoreEntry` literals and persistence adapters need
+  `deprecated_model_ids` (default an empty vector for older stored entries).
+- The catalog no longer includes the old DeepSeek chat/reasoner aliases or
+  retired MiMo V2 models. Select the current V4 and MiMo V2.5 models instead.
+
 ## [1.1.0](https://github.com/meymchen/banshu/compare/v1.0.0...v1.1.0) - 2026-08-27
 
 ### Added

@@ -23,15 +23,29 @@ pub(crate) fn models_from_api_json(
     Some(
         parsed
             .into_iter()
+            .filter(|entry| !entry.deprecated)
             .map(|entry| Model {
+                allow_empty_thinking_signature: crate::models_dev::allows_unsigned_thinking(
+                    models_dev_id,
+                    &entry.id,
+                ),
                 id: entry.id,
                 name: entry.name,
                 api,
                 provider: provider_id.to_string(),
                 base_url: base_url.to_string(),
                 headers: Default::default(),
-                reasoning: crate::models_dev::reasoning_capability(
+                openai_reasoning_format: crate::models_dev::model_reasoning_format(
+                    models_dev_id,
+                    entry.reasoning_options.as_ref(),
+                ),
+                anthropic_reasoning_format: crate::models_dev::model_anthropic_reasoning_format(
+                    models_dev_id,
+                    entry.reasoning_options.as_ref(),
+                ),
+                reasoning: crate::models_dev::reasoning_from_options(
                     entry.reasoning,
+                    entry.reasoning_options.as_ref(),
                     reasoning.token_budget_support(),
                     reasoning.efforts,
                 ),

@@ -26,6 +26,9 @@ pub(crate) fn validate(
     openai: OpenAiCompat,
     anthropic: AnthropicCompat,
 ) -> Result<(), String> {
+    if model.api == ApiKind::OpenAiCompletions {
+        openai.reasoning_format.validate()?;
+    }
     let Some(reasoning) = options.reasoning.as_ref() else {
         return Ok(());
     };

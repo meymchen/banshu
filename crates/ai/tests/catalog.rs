@@ -13,8 +13,8 @@ fn deepseek_catalog_loads_with_provider_metadata() {
 
     let chat = models
         .iter()
-        .find(|m| m.id == "deepseek-chat")
-        .expect("deepseek-chat should be in the bundled catalog");
+        .find(|m| m.id == "deepseek-v4-flash")
+        .expect("deepseek-v4-flash should be in the bundled catalog");
 
     // Identity comes from the catalog; provider/base_url/api are stamped on.
     assert_eq!(chat.provider, "deepseek");

@@ -95,8 +95,16 @@ fn package_carries_only_the_promised_protocols_and_provider_catalogs() {
             "src/models/catalog/deepseek.json",
             "src/models/catalog/kimi.json",
             "src/models/catalog/minimax.json",
+            "src/models/catalog/moonshot-cn.json",
             "src/models/catalog/moonshot.json",
+            "src/models/catalog/qwen-token-plan-cn.json",
+            "src/models/catalog/qwen-token-plan-individual.json",
+            "src/models/catalog/qwen-token-plan.json",
+            "src/models/catalog/xiaomi-token-plan-ams.json",
+            "src/models/catalog/xiaomi-token-plan-cn.json",
+            "src/models/catalog/xiaomi-token-plan-sgp.json",
             "src/models/catalog/xiaomi.json",
+            "src/models/catalog/zai-coding-cn.json",
             "src/models/catalog/zai.json",
         ]
     );
@@ -137,6 +145,6 @@ fn package_carries_only_the_promised_protocols_and_provider_catalogs() {
     }
     assert!(
         !provider_module.contains("pub fn openai()"),
-        "OpenAI is a custom-compatible endpoint, not one of the six built-ins"
+        "OpenAI is a custom-compatible endpoint, not a bundled vendor"
     );
 }

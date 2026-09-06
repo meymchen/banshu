@@ -1,6 +1,6 @@
 //! Per-vendor provider constructors: the thin data definitions for the six
 //! open-source providers banshu targets. Verifies id / name / base URL / env
-//! var / wire protocol for each (values borrowed from pi's provider factories).
+//! var / wire protocol for each API endpoint.
 
 use banshu_ai::{ApiKind, Provider};
 

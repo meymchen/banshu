@@ -71,16 +71,16 @@ async fn normalizes_openai_cache_read_and_write_usage_and_cost() {
         .finish()
         .await;
 
-    assert_eq!(message.usage.input, 400_000);
-    assert_eq!(message.usage.cache_read, 500_000);
+    assert_eq!(message.usage.input, 300_000);
+    assert_eq!(message.usage.cache_read, 600_000);
     assert_eq!(message.usage.cache_write, 100_000);
     assert_eq!(message.usage.output, 100_000);
     assert_eq!(message.usage.total_tokens, 1_100_000);
-    assert_eq!(message.usage.cost.input, 0.4);
-    assert_eq!(message.usage.cost.cache_read, 0.05);
+    assert_eq!(message.usage.cost.input, 0.3);
+    assert_eq!(message.usage.cost.cache_read, 0.06);
     assert_eq!(message.usage.cost.cache_write, 0.125);
     assert_eq!(message.usage.cost.output, 0.2);
-    assert!((message.usage.cost.total - 0.775).abs() < 1e-12);
+    assert!((message.usage.cost.total - 0.685).abs() < 1e-12);
 }
 
 #[tokio::test]

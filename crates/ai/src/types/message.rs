@@ -240,7 +240,7 @@ pub enum StopReason {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct UserMessage {
     /// Ordered content blocks. Always serialized as blocks; deserialization
-    /// also accepts pi-ai's plain-string form (`"content": "hi"`).
+    /// also accepts a plain string (`"content": "hi"`).
     #[serde(deserialize_with = "user_content_blocks")]
     pub content: Vec<UserContent>,
     /// Unix timestamp in milliseconds.
@@ -279,7 +279,7 @@ impl UserMessage {
     }
 }
 
-/// Accept pi-ai's `string | blocks[]` user content, normalizing to blocks.
+/// Accept string or block-array user content, normalizing to blocks.
 fn user_content_blocks<'de, D>(deserializer: D) -> Result<Vec<UserContent>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -321,7 +321,7 @@ pub struct AssistantMessage {
     /// Provider-specific response or message identifier, when exposed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_id: Option<String>,
-    /// Safe provider/runtime diagnostics. Extension field beyond the pi-ai shape.
+    /// Safe provider/runtime diagnostics.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
     /// Token usage and cost.
@@ -343,7 +343,6 @@ pub struct AssistantMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
     /// Structured classification of the failure, set alongside `error_message`.
-    /// Extension field beyond the pi-ai shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<ErrorKind>,
     /// Unix timestamp in milliseconds.

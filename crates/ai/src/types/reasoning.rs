@@ -145,8 +145,8 @@ impl ReasoningCapability {
     /// reasons" and whose provider declares no vocabulary of its own:
     /// [`Off`](ReasoningEffort::Off) through [`High`](ReasoningEffort::High).
     /// [`XHigh`](ReasoningEffort::XHigh) and [`Max`](ReasoningEffort::Max) are
-    /// deliberately absent — no *model* metadata source in use attests them,
-    /// and guessing would defeat the point.
+    /// deliberately absent from this fallback. Model-published controls can
+    /// attest them explicitly.
     ///
     /// A provider that documents its own effort vocabulary replaces this
     /// entirely, in either direction; see

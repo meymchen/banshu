@@ -57,7 +57,6 @@ pub struct ToolCall {
     /// Parsed tool arguments.
     pub arguments: serde_json::Value,
     /// Original JSON text received from the provider, when available.
-    /// Extension field beyond the pi-ai shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_arguments: Option<String>,
 }

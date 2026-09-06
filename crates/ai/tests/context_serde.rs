@@ -349,7 +349,7 @@ fn optional_fields_are_omitted_when_absent() {
     assert!(failed["usage"].get("cacheWrite1h").is_none());
     assert!(failed["usage"].get("reasoning").is_none());
 
-    // Non-redacted thinking omits the `redacted` flag (pi-ai shape).
+    // Non-redacted thinking omits the `redacted` flag.
     let thinking = &value["messages"][1]["content"][0];
     assert!(thinking.get("redacted").is_none());
 

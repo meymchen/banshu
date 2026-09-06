@@ -213,6 +213,14 @@ async fn mount_anthropic_sse(server: &MockServer) {
 /// the format before the model is ever consulted.
 fn reasoning_model(provider: &Provider, server: &MockServer) -> Model {
     let models = provider.models();
+    if provider.id() == "moonshot" {
+        return models
+            .iter()
+            .find(|m| m.id == "kimi-k2-thinking")
+            .unwrap()
+            .clone()
+            .with_base_url(server.uri());
+    }
     models
         .iter()
         .find(|model| model.reasoning.reasons())
@@ -367,7 +375,7 @@ fn every_target_provider_stamps_reasoning_capabilities_onto_its_models() {
         .map(|(id, _, budget, ladder)| (id, budget, ladder))
         .into_iter()
         .chain(ANTHROPIC_TARGETS.map(|(id, _, budget, ladder)| (id, budget, ladder)));
-    for (id, token_budget, ladder) in targets {
+    for (id, token_budget, _) in targets {
         let provider = provider(id);
         let models = provider.models();
         assert!(!models.is_empty(), "`{id}` should serve models");
@@ -385,14 +393,14 @@ fn every_target_provider_stamps_reasoning_capabilities_onto_its_models() {
                 continue;
             }
             attesting_models += 1;
-            // A model source only says *whether* a model reasons, so the
-            // ladder comes from the provider's declared vocabulary — the
-            // baseline only where the provider names none.
-            assert_eq!(
-                model.reasoning.efforts(),
-                ladder,
-                "`{id}`/`{}` attests its provider's declared ladder",
-                model.id
+            // Model-specific effort vocabularies may replace the provider
+            // fallback; upstream_compat pins the exact supported levels.
+            assert!(
+                model
+                    .reasoning
+                    .efforts()
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
             );
             assert_eq!(
                 model.reasoning.token_budget(),
@@ -402,19 +410,10 @@ fn every_target_provider_stamps_reasoning_capabilities_onto_its_models() {
             );
         }
 
-        if ladder.is_empty() {
-            // Moonshot: the endpoint takes no reasoning field, so not one of
-            // its models — thinking or not — claims a requestable level.
-            assert_eq!(
-                attesting_models, 0,
-                "`{id}` declares no requestable level, so none of its models may attest one"
-            );
-        } else {
-            assert!(
-                attesting_models > 0,
-                "`{id}` should serve at least one reasoning model"
-            );
-        }
+        assert!(
+            attesting_models > 0,
+            "`{id}` should serve at least one controllable reasoning model"
+        );
     }
 }
 
@@ -459,10 +458,9 @@ async fn rejected(provider_id: &str, options: StreamOptions, expected: &str) {
 #[tokio::test]
 async fn an_effort_the_model_does_not_attest_is_rejected_before_dispatch() {
     // Which level is out of reach depends on the provider's own vocabulary:
-    // DeepSeek documents `max` but no `minimal`, while Kimi names none and so
-    // stops at the baseline ladder's `high`.
+    // DeepSeek and Kimi K3 document graded effort but neither attests minimal.
     rejected("deepseek", reasoning(ReasoningEffort::Minimal), "minimal").await;
-    rejected("kimi", reasoning(ReasoningEffort::Max), "max").await;
+    rejected("kimi", reasoning(ReasoningEffort::Minimal), "minimal").await;
 }
 
 #[tokio::test]
@@ -471,12 +469,7 @@ async fn a_non_reasoning_model_rejects_every_effort_before_dispatch() {
     mount_openai_sse(&server).await;
 
     let provider = Provider::deepseek();
-    let model = provider
-        .models()
-        .into_iter()
-        .find(|model| !model.reasoning.reasons())
-        .expect("the deepseek catalog has a non-reasoning model")
-        .with_base_url(server.uri());
+    let model = Model::openai_completions("non-reasoning").with_base_url(server.uri());
 
     for effort in ReasoningEffort::ALL {
         let message = provider

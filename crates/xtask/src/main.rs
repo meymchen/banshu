@@ -22,7 +22,15 @@ use xtask::workspace_root;
 /// (banshu provider id, models.dev provider key).
 const PROVIDERS: &[(&str, &str)] = &[
     ("deepseek", "deepseek"),
-    ("zai", "zai"),
+    ("zai", "zai-coding-plan"),
+    ("zai-coding-cn", "zhipuai-coding-plan"),
+    ("moonshot-cn", "moonshotai-cn"),
+    ("xiaomi-token-plan-cn", "xiaomi-token-plan-cn"),
+    ("xiaomi-token-plan-ams", "xiaomi-token-plan-ams"),
+    ("xiaomi-token-plan-sgp", "xiaomi-token-plan-sgp"),
+    ("qwen-token-plan", "alibaba-token-plan"),
+    ("qwen-token-plan-cn", "alibaba-token-plan-cn"),
+    ("qwen-token-plan-individual", "qwen-token-plan-individual"),
     ("minimax", "minimax"),
     ("moonshot", "moonshotai"),
     ("kimi", "kimi-for-coding"),
@@ -37,6 +45,8 @@ struct CatalogModel {
     id: String,
     name: String,
     reasoning: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_options: Option<Value>,
     input: Vec<String>,
     context_window: u32,
     max_tokens: u32,
@@ -59,6 +69,7 @@ impl From<ModelsDevModel> for CatalogModel {
             id: model.id,
             name: model.name,
             reasoning: model.reasoning,
+            reasoning_options: model.reasoning_options,
             input: model.input.iter().map(modality_str).collect(),
             context_window: model.context_window,
             max_tokens: model.max_tokens,
