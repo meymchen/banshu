@@ -50,7 +50,7 @@ jobs:
         with:
           toolchain: 1.98.0
       - name: Run release-plz
-        uses: release-plz/action@aec534bbd8631793b9b3b8f1ee6cd886c322e17f # v0.5
+        uses: release-plz/action@8e61445f0b34e7c6d985255f2f1f05a36eb350dc # v0.5
         with:
           command: release
         env:
@@ -78,7 +78,7 @@ jobs:
         with:
           toolchain: 1.98.0
       - name: Run release-plz
-        uses: release-plz/action@aec534bbd8631793b9b3b8f1ee6cd886c322e17f # v0.5
+        uses: release-plz/action@8e61445f0b34e7c6d985255f2f1f05a36eb350dc # v0.5
         with:
           command: release-pr
         env:
