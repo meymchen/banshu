@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/meymchen/banshu/compare/v1.1.0...v2.0.0) - 2026-10-02
+
+### Added
+
+- [**breaking**] update provider API compatibility and regional catalogs ([#113](https://github.com/meymchen/banshu/pull/113))
+
 ### Added
 
 - Regional Z.AI Coding CN, Moonshot CN, Xiaomi Token Plan CN/AMS/SGP, and
